@@ -1,33 +1,36 @@
 import csv
+import cv2
 import glob
 import os
-import re
 import xml.etree.ElementTree as ET
 
-DATASET_FOLDER = "dataset/"
+import numpy as np
+from train_model import IMAGE_SIZE
+
+DATASET_FOLDER = "images/"
 TRAIN_OUTPUT_FILE = "train.csv"
 VALIDATION_OUTPUT_FILE = "validation.csv"
-DICTIONARY_OUTPUT_FILE = "dictionary.txt"
 
 SPLIT_RATIO = 0.8
-MAX_CLASSES = 37
 
-AUGMENTATION = True
+AUGMENTATION = False
 AUGMENTATION_DEBUG = False
 AUGMENTATION_PER_IMAGE = 25
-AUGMENTATION_FOLDER = "augmentation/"
+
+TRAIN_FOLDER = "train/"
+VALIDATION_FOLDER = "validation/"
 
 try:
     import imgaug as ia
     from imgaug import augmenters as iaa
-    import cv2
 except ImportError:
     print("Augmentation disabled")
     AUGMENTATION = False
 
 
 def generate_images(row):
-    path, class_id, width, height, xmin, ymin, xmax, ymax = row
+    path, width, height, xmin, ymin, xmax, ymax = row
+
     image = cv2.imread(path)
 
     bbs = ia.BoundingBoxesOnImage([
@@ -42,8 +45,7 @@ def generate_images(row):
         iaa.AddToHueAndSaturation((-30, 30)),
         iaa.Sometimes(0.5,
                       iaa.Affine(rotate=(-45, 45)),
-                      iaa.Affine(shear=(-16, 16))
-                      ),
+                      iaa.Affine(shear=(-16, 16))),
         iaa.Sometimes(0.2,
                       iaa.WithColorspace(to_colorspace="HSV", from_colorspace="RGB",
                                          children=iaa.WithChannels(0, iaa.Add((10, 50)))),
@@ -68,53 +70,45 @@ def generate_images(row):
         if AUGMENTATION_DEBUG:
             image_aug = bbs_aug.draw_on_image(image_aug, thickness=2, color=[0, 0, 255])
 
-        new_filename = "{}_aug_{}".format(i, os.path.basename(path))
-        new_path = os.path.join(AUGMENTATION_FOLDER, new_filename)
-        cv2.imwrite(new_path, image_aug)
+        name, ftype = os.path.splitext(os.path.basename(path))
+        new_filename = "{}_aug_{}{}".format(name, i, ftype)
+        new_path = os.path.join(TRAIN_FOLDER, new_filename)
+        cv2.imwrite(new_path, cv2.resize(image_aug, (IMAGE_SIZE, IMAGE_SIZE)))
 
-        new_rows.append([new_path, class_id, width, height, after.x1, after.y1, after.x2, after.y2])
+        new_rows.append([new_path, *scale_coordinates(width, height, after.x1, after.y1, after.x2, after.y2)])
 
     return new_rows
 
 
+def scale_coordinates(width, height, xmin, ymin, xmax, ymax):
+    mid_x = xmin + (xmax - xmin) / 2
+    mid_y = ymin + (ymax - ymin) / 2
+    x0 = (mid_x / width) * IMAGE_SIZE
+    y0 = (mid_y / height) * IMAGE_SIZE
+    x1 = ((xmax - xmin) / width) * IMAGE_SIZE
+    y1 = ((ymax - ymin) / height) * IMAGE_SIZE
+
+    return round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2)
+
+
 def main():
     if not os.path.exists(DATASET_FOLDER):
-        print("Data set not found")
+        print("Dataset not found")
         return
-    if not os.path.exists(AUGMENTATION_FOLDER) and AUGMENTATION:
-        os.makedirs(AUGMENTATION_FOLDER)
+    if not os.path.exists(TRAIN_FOLDER):
+        os.makedirs(TRAIN_FOLDER)
+    if not os.path.exists(VALIDATION_FOLDER):
+        os.makedirs(VALIDATION_FOLDER)
 
-    with open(TRAIN_OUTPUT_FILE, "w") as train, open(VALIDATION_OUTPUT_FILE, "w") as validate, open(
-            DICTIONARY_OUTPUT_FILE, "w") as dictionary:
+    with open(TRAIN_OUTPUT_FILE, "w") as train, open(VALIDATION_OUTPUT_FILE, "w") as validate:
         writer = csv.writer(train, delimiter=",")
         writer2 = csv.writer(validate, delimiter=",")
 
-        already_seen = []
-        class_id = 0
-        animal = []
-        for xml_file in sorted(glob.glob("{}/*xml".format(DATASET_FOLDER))):
+        xml_files = glob.glob("{}/*xml".format(DATASET_FOLDER))
+        for i, xml_file in enumerate(xml_files):
             tree = ET.parse(xml_file)
 
-            animal_type = os.path.basename(xml_file).replace(".xml", "")
-            animal_type = re.sub(r"[^a-zA-Z]+", " ", animal_type).strip().lower()
-            name = "{} ({})".format(animal_type, tree.findtext("./object/name"))
-            if not name in already_seen:
-                print("{}/{}".format(class_id, MAX_CLASSES), end="\r")
-                already_seen.append(name)
-                for index, a in enumerate(animal):
-                    if index <= len(animal) * SPLIT_RATIO:
-                        if AUGMENTATION:
-                            aug = generate_images(a)
-                            for k in aug:
-                                writer.writerow(k)
-                        writer.writerow(a)
-                    else:
-                        writer2.writerow(a)
-                if class_id == MAX_CLASSES:
-                    break
-                dictionary.write("{}\n".format(name))
-                class_id += 1
-                animal = []
+            print("{}/{}".format(i + 1, len(xml_files)), end="\r")
 
             path = os.path.join(DATASET_FOLDER, tree.findtext("./filename"))
 
@@ -130,10 +124,37 @@ def main():
                 xmin -= 160
                 xmax -= 160
 
-            row = [path, class_id, width, height, xmin, ymin, xmax, ymax]
-            animal.append(row)
+            if AUGMENTATION and i <= len(xml_files) * SPLIT_RATIO:
+                aug = generate_images([path, width, height, xmin, ymin, xmax, ymax])
+                for k in aug:
+                    writer.writerow(k)
 
-    print("Done!")
+            row = [path, *scale_coordinates(width, height, xmin, ymin, xmax, ymax)]
+            image = cv2.imread(path)
+            if i <= len(xml_files) * SPLIT_RATIO:
+                row[0] = os.path.join(TRAIN_FOLDER, os.path.basename(path))
+                writer.writerow(row)
+            else:
+                row[0] = os.path.join(VALIDATION_FOLDER, os.path.basename(path))
+                writer2.writerow(row)
+            cv2.imwrite(row[0], cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE)))
+
+    print("\nDone!")
+
+    print("Calculating mean...")
+
+    sum_ = np.array([0.0, 0.0, 0.0])
+    images = glob.glob("{}/*".format(TRAIN_FOLDER))
+    for i, path in enumerate(images):
+        print("{}/{}".format(i + 1, len(images)), end="\r")
+        sum_ += np.sum(cv2.imread(path), axis=(0, 1, 2))
+        if i >= len(images):
+            break
+
+    mean = sum_ / (len(images) * IMAGE_SIZE * IMAGE_SIZE)
+    mean = np.reshape(mean, [1, 1, 3])
+
+    print("\nMean: {}".format(mean))
 
 
 if __name__ == "__main__":

@@ -1,32 +1,48 @@
 # object-localization
+
 This project shows how to localize a single object in an image by just using a convolutional neural network. There are more sophisticated methods like YOLO, R-CNN, SSD or RetinaNet (focal loss), but sometimes the only thing you need are the coordinates of a single object.
 
 # Architecture
-To avoid pretraining the CNN and having the highest speed, the MobileNet [1] model was chosen as a base. I did all the training with alpha = 0.25 and an image size of 128x128. It is also possible to use higher values for a better accuracy (check out [2]).
 
-In order to train for detection, the dense layer was removed and instead I added another depthwise separable convolution block, followed by max pooling and a normal convolution for the coordinates.
+First, let's look at YOLOv2's approach:
 
-If you want to also distinguish between different objects, the loss function has to be adjusted. The following function should work (not tested):
+1. Pretrain Darknet-19 on ImageNet (feature extractor)
+2. Remove the last convolutional layer
+3. Add three 3 x 3 convolutional layers with 1024 filters
+4. Add a 1 x 1 convolutional layer with the number of outputs needed for detection
 
-```
-def custom_loss(y_true, y_pred):
-    box_loss = losses.mean_squared_error(y_true[...,:4], y_pred[...,:4])
-    obj_loss = losses.binary_crossentropy(y_true[...,4:], y_pred[...,4:])
+We proceed in the same way to build the object detector:
 
-    return box_loss + obj_loss
-```
+1. Choose a model from [Keras Applications](https://keras.io/applications/) i.e. feature extractor
+2. Remove the dense layer
+3. Freeze some/all/no layers
+3. Add one/multiple/no convolution block (or `_inverted_res_block` for MobileNetv2)
+4. Add a max pooling layer
+5. Add a convolution layer for the coordinates
 
-Then add another conv layer with softmax, followed by a merge layer. Furthermore, if you want to improve the performance, the MSE can be replaced also by a smooth L1 loss. Square rooting the weight/height is a possibility to improve accuracy for smaller objects (with some weighting maybe). See the YOLO/SSD paper for more information.
+The code in this repository uses MobileNetv2 [1], because it is faster than other models and the performance can be adapted. For example, if alpha = 0.35 with 96x96 is not good enough, one can just increase both values (see [2] for a comparison).
 
-# Installation
-1. Download "The Oxford-IIIT Pet Dataset" [3].
-2. Put the groundtruth data and the dataset in one folder.
-3. Run generate_dataset.py
-4. Run train_model.py
-5. Run evaluate_performance.py
+# Example: Finding cats and dogs in images
 
-# Result
-I stopped training after 5 hours, but the IoU was still improving. Using a CPU for training just took too long.
+## Installation
+
+1. pip3 install imgaug (needed for data augmentations)
+2. Download [The Oxford-IIIT Pet Dataset](http://www.robots.ox.ac.uk/~vgg/data/pets/data/images.tar.gz)
+3. Download [The Oxford-IIIT Pet Dataset Annotations](http://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz)
+4. tar xf images.tar.gz
+5. tar xf annotations.tar.gz
+6. mv annotations/xmls/* images/
+7. python3 generate_dataset.py
+8. Change MEAN in train_model.py (given by the last script).
+9. python3 train_model.py
+10. Adjust the WEIGHTS_FILE in evaluate_performance.py (given by the last script)
+11. python3 evaluate_performance.py
+
+## Result
+
+I trained for about 24 hours the neural network using a CPU. On a GPU training should be a lot faster. The results are 88.4% avg IoU on training set, 67% on validation set.
+
+Configuration: no augmentations, full fine tuning (no freezing), image size 96, alpha 0.35, batch size 32, one additional `_inverted_res_block`
 
 In the following images red is the predicted box, green is the ground truth:
 
@@ -34,10 +50,32 @@ In the following images red is the predicted box, green is the ground truth:
 
 ![Image 2](https://i.imgur.com/ll9PNOF.jpg)
 
+# Guidelines
+
+## Improve accuracy (IoU)
+
+- enable augmentations: set `AUGMENTATION=True` in generate_dataset.py and install *imgaug*.
+- better augmentations: increase `AUGMENTATION_PER_IMAGE` and try out different transformations.
+- for MobileNetv1/2: increase `ALPHA` and `IMAGE_SIZE` in train_model.py
+- other architectures: increase `IMAGE_SIZE`
+- add more layers: e.g. YOLOv2 adds 3 conv layers
+- read https://github.com/keras-team/keras/pull/9965
+
+## Increase training speed
+
+- set `inmemory=True` in train_model.py for small datasets
+- increase `BATCH_SIZE`
+- less layers, `IMAGE_SIZE` and `ALPHA`
+
+## Overfitting
+
+- If the new dataset is small and similar to ImageNet, freeze all layers.
+- If the new dataset is small and not similar to ImageNet, freeze some layers.
+- If the new dataset is large, freeze no layers.
+- read http://cs231n.github.io/transfer-learning/
+
 # References
 
-[1] A. Howard, M. Zhu, B. Chen, D. Kalenichenko, W. Wang, T. Weyand, M. Andreetto, and H. Adam. Mobilenets: Efficient convolutional neural networks for mobile vision applications.
+[1] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, L.-C. Chen. *MobileNetV2: Inverted Residuals and Linear Bottlenecks*.
 
-[2] https://github.com/tensorflow/models/blob/master/research/slim/nets/mobilenet_v1.md
-
-[3] http://www.robots.ox.ac.uk/~vgg/data/pets/
+[2] https://github.com/keras-team/keras-applications/blob/master/keras_applications/mobilenet_v2.py
