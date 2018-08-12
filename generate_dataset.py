@@ -149,7 +149,7 @@ def main():
     images = glob.glob("{}/*".format(TRAIN_FOLDER))
     for i, path in enumerate(images):
         print("{}/{}".format(i + 1, len(images)), end="\r")
-        sum_ = np.sum(cv2.imread(path)) / (IMAGE_SIZE * IMAGE_SIZE)
+        sum_ = np.mean(cv2.imread(path))
 
         length += 1
 
