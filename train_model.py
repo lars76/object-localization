@@ -20,7 +20,8 @@ EPOCHS = 10000
 BATCH_SIZE = 32
 PATIENCE = 500
 
-MEAN = np.array([[[336.45663766, 336.45663766, 336.45663766]]])
+MEAN = 336.4566376593666
+STD = 87.5764903327023
 
 TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
@@ -31,9 +32,10 @@ class DataSequence(Sequence):
     def __load_images(self, dataset):
         return np.array([cv2.imread(f) for f in dataset], dtype='f')
 
-    def __init__(self, csv_file, batch_size, mean, inmemory=False):
+    def __init__(self, csv_file, batch_size, mean, std, inmemory=False):
         self.paths = []
         self.mean = mean
+        self.std = std
         self.batch_size = batch_size
         self.inmemory = inmemory
 
@@ -53,6 +55,7 @@ class DataSequence(Sequence):
         if self.inmemory:
             self.x = self.__load_images(self.paths)
             self.x -= self.mean
+            self.x /= self.std
 
     def __len__(self):
         return math.ceil(len(self.y) / self.batch_size)
@@ -68,6 +71,7 @@ class DataSequence(Sequence):
 
         images = self.__load_images(batch_x)
         images -= self.mean
+        images /= self.std
 
         return images, batch_y
 
@@ -90,9 +94,9 @@ def create_model(size, alpha):
     return Model(inputs=model.input, outputs=x)
 
 
-def train(model, epochs, batch_size, patience, train_csv, validation_csv, mean):
-    train_datagen = DataSequence(train_csv, batch_size, mean)
-    validation_datagen = DataSequence(validation_csv, batch_size, mean)
+def train(model, epochs, batch_size, patience, train_csv, validation_csv, mean, std):
+    train_datagen = DataSequence(train_csv, batch_size, mean, std)
+    validation_datagen = DataSequence(validation_csv, batch_size, mean, std)
 
     model.compile(loss="mean_squared_error", optimizer="adam", metrics=["accuracy"])
     checkpoint = ModelCheckpoint("model-{val_loss:.2f}.h5", monitor="val_loss", verbose=1, save_best_only=True,
@@ -107,7 +111,7 @@ def train(model, epochs, batch_size, patience, train_csv, validation_csv, mean):
 
 def main():
     model = create_model(IMAGE_SIZE, ALPHA)
-    train(model, EPOCHS, BATCH_SIZE, PATIENCE, TRAIN_CSV, VALIDATION_CSV, MEAN)
+    train(model, EPOCHS, BATCH_SIZE, PATIENCE, TRAIN_CSV, VALIDATION_CSV, MEAN, STD)
 
 
 if __name__ == "__main__":

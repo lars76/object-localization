@@ -33,7 +33,7 @@ The code in this repository uses MobileNetv2 [1], because it is faster than othe
 5. tar xf annotations.tar.gz
 6. mv annotations/xmls/* images/
 7. python3 generate_dataset.py
-8. Change MEAN in train_model.py (given by the last script).
+8. Change MEAN, STD in train_model.py (given by the last script).
 9. python3 train_model.py
 10. Adjust the WEIGHTS_FILE in evaluate_performance.py (given by the last script)
 11. python3 evaluate_performance.py

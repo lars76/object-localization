@@ -7,7 +7,7 @@ import numpy as np
 import csv
 
 from generate_dataset import TRAIN_OUTPUT_FILE, VALIDATION_OUTPUT_FILE, DATASET_FOLDER
-from train_model import create_model, IMAGE_SIZE, ALPHA, MEAN
+from train_model import create_model, IMAGE_SIZE, ALPHA, MEAN, STD
 
 DEBUG = False
 WEIGHTS_FILE = "model-43.63.h5"
@@ -44,6 +44,7 @@ def predict_image(path, model):
 
     image = np.array(im, dtype='f')
     image -= MEAN
+    image /= STD
 
     region = model.predict(x=np.array([image]))[0]
 

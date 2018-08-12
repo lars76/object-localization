@@ -141,20 +141,26 @@ def main():
 
     print("\nDone!")
 
-    print("Calculating mean...")
+    print("Calculating mean and std...")
 
-    sum_ = np.array([0.0, 0.0, 0.0])
+    mean = 0
+    std = 0
+    length = 0
     images = glob.glob("{}/*".format(TRAIN_FOLDER))
     for i, path in enumerate(images):
         print("{}/{}".format(i + 1, len(images)), end="\r")
-        sum_ += np.sum(cv2.imread(path), axis=(0, 1, 2))
-        if i >= len(images):
-            break
+        sum_ = np.sum(cv2.imread(path)) / (IMAGE_SIZE * IMAGE_SIZE)
 
-    mean = sum_ / (len(images) * IMAGE_SIZE * IMAGE_SIZE)
-    mean = np.reshape(mean, [1, 1, 3])
+        length += 1
+
+        mean_next = mean + (sum_ - mean) / length
+        std += (sum_ - mean) * (sum_ - mean_next)
+        mean = mean_next
+
+    std = np.sqrt(std / (length - 1))
 
     print("\nMean: {}".format(mean))
+    print("Std: {}".format(std))
 
 
 if __name__ == "__main__":
