@@ -4,24 +4,23 @@ import math
 import cv2
 import numpy as np
 from keras import Model
-from keras.applications.mobilenetv2 import MobileNetV2
+from keras.applications.mobilenetv2 import MobileNetV2, preprocess_input
 from keras_applications.mobilenet_v2 import _inverted_res_block
-from keras.callbacks import ModelCheckpoint, EarlyStopping
+from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from keras.layers import MaxPooling2D, Conv2D, Reshape
 from keras.utils import Sequence
 
 # 0.35, 0.5, 0.75, 1.0
-ALPHA = 0.35
+ALPHA = 1.0
 
 # 96, 128, 160, 192, 224
 IMAGE_SIZE = 96
 
-EPOCHS = 10000
+EPOCHS = 200
 BATCH_SIZE = 32
-PATIENCE = 500
+PATIENCE = 50
 
-MEAN = 112.15221255312161
-STD = 29.19216344423406
+THREADS = 4
 
 TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
@@ -32,10 +31,8 @@ class DataSequence(Sequence):
     def __load_images(self, dataset):
         return np.array([cv2.imread(f) for f in dataset], dtype='f')
 
-    def __init__(self, csv_file, batch_size, mean, std, inmemory=False):
+    def __init__(self, csv_file, batch_size, inmemory=False):
         self.paths = []
-        self.mean = mean
-        self.std = std
         self.batch_size = batch_size
         self.inmemory = inmemory
 
@@ -54,8 +51,7 @@ class DataSequence(Sequence):
 
         if self.inmemory:
             self.x = self.__load_images(self.paths)
-            self.x -= self.mean
-            self.x /= self.std
+            self.x = preprocess_input(self.x)
 
     def __len__(self):
         return math.ceil(len(self.y) / self.batch_size)
@@ -70,8 +66,7 @@ class DataSequence(Sequence):
         batch_x = self.paths[idx * self.batch_size:(idx + 1) * self.batch_size]
 
         images = self.__load_images(batch_x)
-        images -= self.mean
-        images /= self.std
+        images = preprocess_input(images)
 
         return images, batch_y
 
@@ -84,34 +79,37 @@ def create_model(size, alpha):
     #     layer.trainable = False
 
     x = model.layers[-1].output
-
-    x = _inverted_res_block(x, filters=320, alpha=alpha, stride=1, expansion=6, block_id=17)
-
-    x = MaxPooling2D(pool_size=(3, 3))(x)
-    x = Conv2D(4, kernel_size=(1, 1), padding="same")(x)
+    x = Conv2D(4, kernel_size=3, name="coords")(x)
     x = Reshape((4,))(x)
 
     return Model(inputs=model.input, outputs=x)
 
 
-def train(model, epochs, batch_size, patience, train_csv, validation_csv, mean, std):
-    train_datagen = DataSequence(train_csv, batch_size, mean, std)
-    validation_datagen = DataSequence(validation_csv, batch_size, mean, std)
+def train(model, epochs, batch_size, patience, train_csv, validation_csv):
+    train_datagen = DataSequence(train_csv, batch_size)
+    validation_datagen = DataSequence(validation_csv, batch_size)
 
     model.compile(loss="mean_squared_error", optimizer="adam", metrics=["accuracy"])
     checkpoint = ModelCheckpoint("model-{val_loss:.2f}.h5", monitor="val_loss", verbose=1, save_best_only=True,
                                  save_weights_only=True, mode="auto", period=1)
     stop = EarlyStopping(monitor="val_loss", patience=patience, mode="auto")
+    reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=10, min_lr=1e-7, verbose=1, mode="min")
 
     model.summary()
 
-    model.fit_generator(train_datagen, epochs=epochs, validation_data=validation_datagen,
-                        callbacks=[checkpoint, stop])
+    model.fit_generator(generator=train_datagen,
+                        epochs=EPOCHS,
+                        validation_data=validation_datagen,
+                        callbacks=[checkpoint, reduce_lr, stop],
+                        workers=THREADS,
+                        use_multiprocessing=True,
+                        shuffle=True,
+                        verbose=1)
 
 
 def main():
     model = create_model(IMAGE_SIZE, ALPHA)
-    train(model, EPOCHS, BATCH_SIZE, PATIENCE, TRAIN_CSV, VALIDATION_CSV, MEAN, STD)
+    train(model, EPOCHS, BATCH_SIZE, PATIENCE, TRAIN_CSV, VALIDATION_CSV)
 
 
 if __name__ == "__main__":

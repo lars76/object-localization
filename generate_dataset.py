@@ -141,6 +141,7 @@ def main():
 
     print("\nDone!")
 
+    """ preprocess_input is as good as exact mean/std
     print("Calculating mean and std...")
 
     mean = 0
@@ -161,6 +162,7 @@ def main():
 
     print("\nMean: {}".format(mean))
     print("Std: {}".format(std))
+    """
 
 
 if __name__ == "__main__":

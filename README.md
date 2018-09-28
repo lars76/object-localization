@@ -17,10 +17,9 @@ We proceed in the same way to build the object detector:
 2. Remove the dense layer
 3. Freeze some/all/no layers
 3. Add one/multiple/no convolution block (or `_inverted_res_block` for MobileNetv2)
-4. Add a max pooling layer
-5. Add a convolution layer for the coordinates
+4. Add a convolution layer for the coordinates
 
-The code in this repository uses MobileNetv2 [1], because it is faster than other models and the performance can be adapted. For example, if alpha = 0.35 with 96x96 is not good enough, one can just increase both values (see [2] for a comparison).
+The code in this repository uses MobileNetv2 [1], because it is faster than other models and the performance can be adapted. For example, if alpha = 0.35 with 96x96 is not good enough, one can just increase both values (see [2] for a comparison). If you use another architecture, change `preprocess_input`.
 
 # Example: Finding cats and dogs in images
 
@@ -33,16 +32,15 @@ The code in this repository uses MobileNetv2 [1], because it is faster than othe
 5. tar xf annotations.tar.gz
 6. mv annotations/xmls/* images/
 7. python3 generate_dataset.py
-8. Change MEAN, STD in train_model.py (given by the last script).
-9. python3 train_model.py
-10. Adjust the WEIGHTS_FILE in evaluate_performance.py (given by the last script)
-11. python3 evaluate_performance.py
+8. python3 train_model.py
+9. Adjust the WEIGHTS_FILE in evaluate_performance.py (given by the last script)
+10. python3 evaluate_performance.py
 
 ## Result
 
-I trained for about 24 hours the neural network using a CPU. On a GPU training should be a lot faster. The results are 88.4% avg IoU on training set, 67% on validation set.
+I trained the neural network for 75 epochs. The results are 90% avg IoU on training set, 72% on validation set.
 
-Configuration: no augmentations, full fine tuning (no freezing), image size 96, alpha 0.35, batch size 32, one additional `_inverted_res_block`
+Configuration: no augmentations, full fine tuning (no freezing), image size 96, alpha 1.0, batch size 32, initial learning rate 0.001 (then decrease).
 
 In the following images red is the predicted box, green is the ground truth:
 

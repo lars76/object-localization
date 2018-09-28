@@ -7,10 +7,11 @@ import numpy as np
 import csv
 
 from generate_dataset import TRAIN_OUTPUT_FILE, VALIDATION_OUTPUT_FILE, DATASET_FOLDER
-from train_model import create_model, IMAGE_SIZE, ALPHA, MEAN, STD
+from train_model import create_model, IMAGE_SIZE, ALPHA
+from keras.applications.mobilenetv2 import preprocess_input
 
 DEBUG = False
-WEIGHTS_FILE = "model-43.63.h5"
+WEIGHTS_FILE = "model-26.09.h5"
 
 def iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
@@ -43,8 +44,7 @@ def predict_image(path, model):
         im = cv2.resize(im, (IMAGE_SIZE, IMAGE_SIZE))
 
     image = np.array(im, dtype='f')
-    image -= MEAN
-    image /= STD
+    image = preprocess_input(image)
 
     region = model.predict(x=np.array([image]))[0]
 
