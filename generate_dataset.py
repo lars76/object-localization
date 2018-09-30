@@ -5,7 +5,6 @@ import os
 import xml.etree.ElementTree as ET
 
 import numpy as np
-from train_model import IMAGE_SIZE
 
 DATASET_FOLDER = "images/"
 TRAIN_OUTPUT_FILE = "train.csv"
@@ -16,6 +15,8 @@ SPLIT_RATIO = 0.8
 AUGMENTATION = False
 AUGMENTATION_DEBUG = False
 AUGMENTATION_PER_IMAGE = 25
+
+IMAGE_SIZE = 96
 
 TRAIN_FOLDER = "train/"
 VALIDATION_FOLDER = "validation/"
@@ -29,7 +30,7 @@ except ImportError:
 
 
 def generate_images(row):
-    path, width, height, xmin, ymin, xmax, ymax = row
+    path, width, height, xmin, ymin, xmax, ymax, class_name, class_id = row
 
     image = cv2.imread(path)
 
@@ -72,10 +73,10 @@ def generate_images(row):
 
         name, ftype = os.path.splitext(os.path.basename(path))
         new_filename = "{}_aug_{}{}".format(name, i, ftype)
-        new_path = os.path.join(TRAIN_FOLDER, new_filename)
+        new_path = os.path.abspath(os.path.join(TRAIN_FOLDER, new_filename))
         cv2.imwrite(new_path, cv2.resize(image_aug, (IMAGE_SIZE, IMAGE_SIZE)))
 
-        new_rows.append([new_path, *scale_coordinates(width, height, after.x1, after.y1, after.x2, after.y2)])
+        new_rows.append([new_path, *scale_coordinates(width, height, after.x1, after.y1, after.x2, after.y2), class_name, class_id])
 
     return new_rows
 
@@ -100,44 +101,80 @@ def main():
     if not os.path.exists(VALIDATION_FOLDER):
         os.makedirs(VALIDATION_FOLDER)
 
+    class_names = {}
+    k = 0
+    output = []
+    xml_files = glob.glob("{}/*xml".format(DATASET_FOLDER))
+    for i, xml_file in enumerate(xml_files):
+        tree = ET.parse(xml_file)
+
+        path = os.path.join(DATASET_FOLDER, tree.findtext("./filename"))
+
+        height = int(tree.findtext("./size/height"))
+        width = int(tree.findtext("./size/width"))
+        xmin = int(tree.findtext("./object/bndbox/xmin"))
+        ymin = int(tree.findtext("./object/bndbox/ymin"))
+        xmax = int(tree.findtext("./object/bndbox/xmax"))
+        ymax = int(tree.findtext("./object/bndbox/ymax"))
+
+        # hardcoded fix, the box is wrong
+        if "Abyssinian_1.jpg" in path:
+            xmin -= 160
+            xmax -= 160
+
+        basename = os.path.basename(path)
+        basename = os.path.splitext(basename)[0]
+        class_name = basename[:basename.rfind("_")].lower()
+        if class_name not in class_names:
+            class_names[class_name] = k
+            k += 1
+
+        output.append((path, width, height, xmin, ymin, xmax, ymax, class_name, class_names[class_name]))
+
+    # preserve percentage of samples for each class ("stratified")
+    output.sort(key=lambda tup : tup[-1])
+
+    lengths = []
+    i = 0
+    last = 0
+    for j, row in enumerate(output):
+        if last == row[-1]:
+            i += 1
+        else:
+            print("class {}: {} images".format(output[j-1][-2], i))
+            lengths.append(i)
+            i = 1
+            last += 1
+
+    print("class {}: {} images".format(output[j-1][-2], i))
+    lengths.append(i)
+
     with open(TRAIN_OUTPUT_FILE, "w") as train, open(VALIDATION_OUTPUT_FILE, "w") as validate:
         writer = csv.writer(train, delimiter=",")
         writer2 = csv.writer(validate, delimiter=",")
 
-        xml_files = glob.glob("{}/*xml".format(DATASET_FOLDER))
-        for i, xml_file in enumerate(xml_files):
-            tree = ET.parse(xml_file)
+        s = 0
+        for c in lengths:
+            for i in range(c):
+                print("{}/{}".format(s + 1, sum(lengths)), end="\r")
 
-            print("{}/{}".format(i + 1, len(xml_files)), end="\r")
+                path, width, height, xmin, ymin, xmax, ymax, class_name, class_id = output[s]
+                if AUGMENTATION and i <= c * SPLIT_RATIO:
+                    aug = generate_images([path, width, height, xmin, ymin, xmax, ymax, class_name, class_names[class_name]])
+                    for k in aug:
+                        writer.writerow(k)
 
-            path = os.path.join(DATASET_FOLDER, tree.findtext("./filename"))
+                row = [path, *scale_coordinates(width, height, xmin, ymin, xmax, ymax), class_name, class_names[class_name]]
+                image = cv2.imread(path)
+                if i <= c * SPLIT_RATIO:
+                    row[0] = os.path.abspath(os.path.join(TRAIN_FOLDER, os.path.basename(path)))
+                    writer.writerow(row)
+                else:
+                    row[0] = os.path.abspath(os.path.join(VALIDATION_FOLDER, os.path.basename(path)))
+                    writer2.writerow(row)
+                cv2.imwrite(row[0], cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE)))
 
-            height = int(tree.findtext("./size/height"))
-            width = int(tree.findtext("./size/width"))
-            xmin = int(tree.findtext("./object/bndbox/xmin"))
-            ymin = int(tree.findtext("./object/bndbox/ymin"))
-            xmax = int(tree.findtext("./object/bndbox/xmax"))
-            ymax = int(tree.findtext("./object/bndbox/ymax"))
-
-            # hardcoded fix, the box is wrong
-            if "Abyssinian_1.jpg" in path:
-                xmin -= 160
-                xmax -= 160
-
-            if AUGMENTATION and i <= len(xml_files) * SPLIT_RATIO:
-                aug = generate_images([path, width, height, xmin, ymin, xmax, ymax])
-                for k in aug:
-                    writer.writerow(k)
-
-            row = [path, *scale_coordinates(width, height, xmin, ymin, xmax, ymax)]
-            image = cv2.imread(path)
-            if i <= len(xml_files) * SPLIT_RATIO:
-                row[0] = os.path.join(TRAIN_FOLDER, os.path.basename(path))
-                writer.writerow(row)
-            else:
-                row[0] = os.path.join(VALIDATION_FOLDER, os.path.basename(path))
-                writer2.writerow(row)
-            cv2.imwrite(row[0], cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE)))
+                s += 1
 
     print("\nDone!")
 

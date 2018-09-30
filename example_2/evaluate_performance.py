@@ -6,12 +6,11 @@ import cv2
 import numpy as np
 import csv
 
-from generate_dataset import TRAIN_OUTPUT_FILE, VALIDATION_OUTPUT_FILE, DATASET_FOLDER
-from train_model import create_model, IMAGE_SIZE, ALPHA
+from train_model import TRAIN_CSV, VALIDATION_CSV, CLASSES, create_model, IMAGE_SIZE, ALPHA
 from keras.applications.mobilenetv2 import preprocess_input
 
 DEBUG = False
-WEIGHTS_FILE = "model-26.09.h5"
+WEIGHTS_FILE = "model-2.00.h5"
 
 def iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
@@ -46,9 +45,10 @@ def predict_image(path, model):
     image = np.array(im, dtype='f')
     image = preprocess_input(image)
 
-    region = model.predict(x=np.array([image]))[0]
+    region, class_id = model.predict(x=np.array([image]))
+    class_id = np.argmax(class_id)
 
-    return convert_coords(*region)
+    return convert_coords(*region[0]), class_id
 
 def show_image(path, ground_truth, pred):
     image = cv2.imread(path)
@@ -67,15 +67,19 @@ def dataset_iou(csv_file, model):
         lines = sum(1 for row in f)
         f.seek(0)
 
+        accuracy = 0
         ious = []
         reader = csv.reader(f, delimiter=",")
-        for i, (path, xmin, ymin, xmax, ymax) in enumerate(reader):
+        for i, (path, xmin, ymin, xmax, ymax, _, class_id) in enumerate(reader):
             print("{}/{}".format(i + 1, lines), end="\r")
 
             coords = (float(xmin), float(ymin), float(xmax), float(ymax))
             ground_truth = convert_coords(*coords)
 
-            pred = predict_image(path, model)
+            pred, pred_class = predict_image(path, model)
+            class_id = min(int(class_id), CLASSES-1)
+            if class_id == pred_class:
+                accuracy += 1
 
             iou_ = iou(ground_truth, pred)
             ious.append(iou_)
@@ -88,23 +92,25 @@ def dataset_iou(csv_file, model):
         print("\nAvg IoU: {}".format(np.mean(ious)))
         print("Highest IoU: {}".format(np.max(ious)))
         print("Lowest IoU: {}".format(np.min(ious)))
+        print("Class accuracy: {}".format(accuracy / (i + 1)))
+
 
 def main():
     model = create_model(IMAGE_SIZE, ALPHA)
     model.load_weights(WEIGHTS_FILE)
 
     print("IoU on training data")
-    dataset_iou(TRAIN_OUTPUT_FILE, model)
+    dataset_iou(TRAIN_CSV, model)
 
     print("\nIoU on validation data")
-    dataset_iou(VALIDATION_OUTPUT_FILE, model)
+    dataset_iou(VALIDATION_CSV, model)
 
     print("\nTrying out unscaled image")
-    for k in os.listdir(DATASET_FOLDER):
+    for k in os.listdir("../images/"):
         if "jpg" in k:
             break
-    path = os.path.join(DATASET_FOLDER, k)
-    pred = predict_image(path, model)
+    path = os.path.join("../images/", k)
+    pred, pred_class = predict_image(path, model)
 
     height, width, _ = cv2.imread(path).shape
     scaled = np.array([pred[0] * width / IMAGE_SIZE, pred[1] * height / IMAGE_SIZE,
