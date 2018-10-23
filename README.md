@@ -64,6 +64,18 @@ Instead of using all 37 classes, the code will only output class 0 (contains onl
 
 I trained the neural network for 74 epochs. The results are 85% avg IoU and 97% accuracy on training set and validation set.
 
+# Example 3: Segmentation-like detection
+
+## Changes
+
+Example 3 shows another way to do object detection. This time we will use only classification. For an in-depth explanation see [my blog post](https://lars76.github.io/neural-networks/object-detection/obj-detection-using-segmentation/).
+
+## Result
+
+I did not calculate IoU, but dice loss was at about 92%.
+
+![Dog](https://lars76.github.io/assets/images/dog2.gif)
+
 # Guidelines
 
 ## Improve accuracy (IoU)
