@@ -62,7 +62,7 @@ class DataGenerator(Sequence):
                 cell_stop_x = min(math.ceil(xmax / CELL_WIDTH) - 1, WIDTH_CELLS - 1)
 
                 cell_start_y = max(math.ceil(ymin / CELL_HEIGHT) - 1, 0)
-                cell_stop_y = min(math.ceil(ymax / CELL_HEIGHT) - 1, HEIGHT_CELL - 1)
+                cell_stop_y = min(math.ceil(ymax / CELL_HEIGHT) - 1, HEIGHT_CELLS - 1)
 
                 for k in range(cell_start_y, cell_stop_y+1):
                     for k2 in range(cell_start_x, cell_stop_x+1):
