@@ -7,7 +7,7 @@ from PIL import Image
 from tensorflow.keras import Model
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.layers import Reshape, GlobalAveragePooling2D, Dense, Input
+from tensorflow.keras.layers import Concatenate, Conv2D, UpSampling2D, Reshape
 from tensorflow.keras.utils import Sequence
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import binary_crossentropy
@@ -19,15 +19,15 @@ ALPHA = 1.0
 IMAGE_HEIGHT = 224
 IMAGE_WIDTH = 224
 
-HEIGHT_CELLS = 8
-WIDTH_CELLS = 8
+HEIGHT_CELLS = 28
+WIDTH_CELLS = 28
 
 CELL_WIDTH = IMAGE_WIDTH / WIDTH_CELLS
 CELL_HEIGHT = IMAGE_HEIGHT / HEIGHT_CELLS
 
 EPOCHS = 200
-BATCH_SIZE = 32
-PATIENCE = 50
+BATCH_SIZE = 8
+PATIENCE = 15
 
 THREADS = 4
 
@@ -85,12 +85,20 @@ class DataGenerator(Sequence):
 
         return x, batch_y
 
-def create_model():
+def create_model(trainable=True):
     model = MobileNetV2(input_shape=(IMAGE_HEIGHT, IMAGE_WIDTH, 3), include_top=False, alpha=ALPHA, weights="imagenet")
-    out = model.layers[-1].output
 
-    x = GlobalAveragePooling2D()(out)
-    x = Dense(HEIGHT_CELLS * WIDTH_CELLS, activation="sigmoid")(x)
+    for layer in model.layers:
+        layer.trainable = trainable
+
+    block1 = model.get_layer("block_5_add").output
+    block2 = model.get_layer("block_12_add").output
+    block3 = model.get_layer("block_15_add").output
+
+    x = Concatenate()([UpSampling2D()(block3), block2])
+    x = Concatenate()([UpSampling2D()(x), block1])
+
+    x = Conv2D(1, kernel_size=1, activation="sigmoid")(x)
     x = Reshape((HEIGHT_CELLS, WIDTH_CELLS))(x)
 
     return Model(inputs=model.input, outputs=x)
@@ -111,7 +119,7 @@ def main():
     train_datagen = DataGenerator(TRAIN_CSV)
     validation_datagen = DataGenerator(VALIDATION_CSV)
 
-    optimizer = Adam(lr=1e-3, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
+    optimizer = Adam(lr=1e-4, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
     model.compile(loss=loss, optimizer=optimizer, metrics=[dice_coefficient])
     
     checkpoint = ModelCheckpoint("model-{val_loss:.2f}.h5", monitor="val_loss", verbose=1, save_best_only=True,

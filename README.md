@@ -72,7 +72,7 @@ Example 3 shows another way to do object detection. This time we will use only c
 
 ## Result
 
-I did not calculate IoU, but dice loss was at about 92%.
+I did not calculate IoU, but dice loss was at about 87%-92%.
 
 ![Dog](https://lars76.github.io/assets/images/dog2.gif)
 

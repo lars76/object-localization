@@ -2,7 +2,7 @@ from train_model import *
 import cv2
 import glob
 
-WEIGHTS_FILE = "model-0.27.h5"
+WEIGHTS_FILE = "model-0.34.h5"
 IMAGES = "../images/*jpg"
 
 def main():
