@@ -1,9 +1,9 @@
-from train_model import *
+from train import *
 import cv2
 import glob
 
 WEIGHTS_FILE = "model-0.34.h5"
-IMAGES = "../images/*jpg"
+IMAGES = "images/*jpg"
 THRESHOLD = 0.5
 EPSILON = 0.02
 
@@ -34,7 +34,7 @@ def main():
         for cnt in contours:
             approx = cv2.approxPolyDP(cnt, EPSILON * cv2.arcLength(cnt, True), True)
             x, y, w, h = cv2.boundingRect(approx)
-            cv2.rectangle(unscaled, (x, y), (x + w, y + h), (0, 255, 0), 1);
+            cv2.rectangle(unscaled, (x, y), (x + w, y + h), (0, 255, 0), 1)
 
         cv2.imshow("image", unscaled)
         cv2.waitKey(0)

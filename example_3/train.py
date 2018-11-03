@@ -31,8 +31,8 @@ PATIENCE = 15
 
 THREADS = 4
 
-TRAIN_CSV = "../train.csv"
-VALIDATION_CSV = "../validation.csv"
+TRAIN_CSV = "train.csv"
+VALIDATION_CSV = "validation.csv"
 
 class DataGenerator(Sequence):
 
@@ -40,50 +40,49 @@ class DataGenerator(Sequence):
         self.paths = []
 
         with open(csv_file, "r") as file:
-            lines = sum(1 for line in file)
+            self.mask = np.zeros((sum(1 for line in file), HEIGHT_CELLS, WIDTH_CELLS))
             file.seek(0)
 
-            self.y = np.zeros((lines - 1, HEIGHT_CELLS, WIDTH_CELLS))
-
             reader = csv.reader(file, delimiter=",")
-            next(reader)
 
             for index, row in enumerate(reader):
-                filename = row[0]
-                x, y, w, h = float(row[1]), float(row[2]), float(row[3]), float(row[4])
+                for i, r in enumerate(row[1:7]):
+                    row[i+1] = int(r)
 
-                xmin = x - w / 2
-                ymin = y - h / 2
+                path, image_height, image_width, x0, y0, x1, y1, _, _ = row
 
-                xmax = xmin + w
-                ymax = ymin + h
+                x0 *= IMAGE_WIDTH / image_width
+                y0 *= IMAGE_HEIGHT / image_height
+                x1 *= IMAGE_WIDTH / image_width
+                y1 *= IMAGE_HEIGHT / image_height 
 
-                cell_start_x = max(math.ceil(xmin / CELL_WIDTH) - 1, 0)
-                cell_stop_x = min(math.ceil(xmax / CELL_WIDTH) - 1, WIDTH_CELLS - 1)
+                cell_start_x = max(math.ceil(x0 / CELL_WIDTH) - 1, 0)
+                cell_stop_x = min(math.ceil(x1 / CELL_WIDTH) - 1, WIDTH_CELLS - 1)
 
-                cell_start_y = max(math.ceil(ymin / CELL_HEIGHT) - 1, 0)
-                cell_stop_y = min(math.ceil(ymax / CELL_HEIGHT) - 1, HEIGHT_CELLS - 1)
+                cell_start_y = max(math.ceil(y0 / CELL_HEIGHT) - 1, 0)
+                cell_stop_y = min(math.ceil(y1 / CELL_HEIGHT) - 1, HEIGHT_CELLS - 1)
 
-                for k in range(cell_start_y, cell_stop_y+1):
-                    for k2 in range(cell_start_x, cell_stop_x+1):
-                        self.y[index, k, k2] = 1
+                self.mask[index, cell_start_y:cell_stop_y+1, cell_start_x:cell_stop_x+1] = 1
 
-                self.paths.append(filename)
+                self.paths.append(path)
 
     def __len__(self):
-        return math.ceil(len(self.y) / BATCH_SIZE)
+        return math.ceil(len(self.mask) / BATCH_SIZE)
 
     def __getitem__(self, idx):
-        batch_x = self.paths[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
-        batch_y = self.y[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
+        batch_paths = self.paths[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
+        batch_masks = self.mask[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
 
-        x = np.zeros((len(batch_x), IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=np.float32)
-        for i, f in enumerate(batch_x):
+        batch_images = np.zeros((len(batch_paths), IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=np.float32)
+        for i, f in enumerate(batch_paths):
             img = Image.open(f)
-            x[i] = preprocess_input(np.array(img, dtype=np.float32))
+            img = img.resize((IMAGE_WIDTH, IMAGE_HEIGHT))
+            img = img.convert('RGB')
+
+            batch_images[i] = preprocess_input(np.array(img, dtype=np.float32))
             img.close()
 
-        return x, batch_y
+        return batch_images, batch_masks
 
 def create_model(trainable=True):
     model = MobileNetV2(input_shape=(IMAGE_HEIGHT, IMAGE_WIDTH, 3), include_top=False, alpha=ALPHA, weights="imagenet")

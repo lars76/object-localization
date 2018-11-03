@@ -15,11 +15,7 @@ SPLIT_RATIO = 0.8
 AUGMENTATION = False
 AUGMENTATION_DEBUG = False
 AUGMENTATION_PER_IMAGE = 25
-
-IMAGE_SIZE = 96
-
-TRAIN_FOLDER = "train/"
-VALIDATION_FOLDER = "validation/"
+AUGMENTATION_FOLDER = "augmentations"
 
 try:
     import imgaug as ia
@@ -30,7 +26,7 @@ except ImportError:
 
 
 def generate_images(row):
-    path, width, height, xmin, ymin, xmax, ymax, class_name, class_id = row
+    path, height, width, xmin, ymin, xmax, ymax, class_name, class_id = row
 
     image = cv2.imread(path)
 
@@ -73,33 +69,20 @@ def generate_images(row):
 
         name, ftype = os.path.splitext(os.path.basename(path))
         new_filename = "{}_aug_{}{}".format(name, i, ftype)
-        new_path = os.path.abspath(os.path.join(TRAIN_FOLDER, new_filename))
-        cv2.imwrite(new_path, cv2.resize(image_aug, (IMAGE_SIZE, IMAGE_SIZE)))
+        if not os.path.exists(AUGMENTATION_FOLDER):
+            os.makedirs(AUGMENTATION_FOLDER)
 
-        new_rows.append([new_path, *scale_coordinates(width, height, after.x1, after.y1, after.x2, after.y2), class_name, class_id])
+        new_path = os.path.abspath(os.path.join(AUGMENTATION_FOLDER, new_filename))
+        cv2.imwrite(new_path, image_aug)
+
+        new_rows.append([new_path, height, width, after.x1, after.y1, after.x2, after.y2, class_name, class_id])
 
     return new_rows
-
-
-def scale_coordinates(width, height, xmin, ymin, xmax, ymax):
-    mid_x = xmin + (xmax - xmin) / 2
-    mid_y = ymin + (ymax - ymin) / 2
-    x0 = (mid_x / width) * IMAGE_SIZE
-    y0 = (mid_y / height) * IMAGE_SIZE
-    x1 = ((xmax - xmin) / width) * IMAGE_SIZE
-    y1 = ((ymax - ymin) / height) * IMAGE_SIZE
-
-    return round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2)
-
 
 def main():
     if not os.path.exists(DATASET_FOLDER):
         print("Dataset not found")
         return
-    if not os.path.exists(TRAIN_FOLDER):
-        os.makedirs(TRAIN_FOLDER)
-    if not os.path.exists(VALIDATION_FOLDER):
-        os.makedirs(VALIDATION_FOLDER)
 
     class_names = {}
     k = 0
@@ -129,7 +112,7 @@ def main():
             class_names[class_name] = k
             k += 1
 
-        output.append((path, width, height, xmin, ymin, xmax, ymax, class_name, class_names[class_name]))
+        output.append((path, height, width, xmin, ymin, xmax, ymax, class_name, class_names[class_name]))
 
     # preserve percentage of samples for each class ("stratified")
     output.sort(key=lambda tup : tup[-1])
@@ -158,21 +141,17 @@ def main():
             for i in range(c):
                 print("{}/{}".format(s + 1, sum(lengths)), end="\r")
 
-                path, width, height, xmin, ymin, xmax, ymax, class_name, class_id = output[s]
+                path, height, width, xmin, ymin, xmax, ymax, class_name, class_id = output[s]
                 if AUGMENTATION and i <= c * SPLIT_RATIO:
                     aug = generate_images([path, width, height, xmin, ymin, xmax, ymax, class_name, class_names[class_name]])
                     for k in aug:
                         writer.writerow(k)
 
-                row = [path, *scale_coordinates(width, height, xmin, ymin, xmax, ymax), class_name, class_names[class_name]]
-                image = cv2.imread(path)
+                row = [path, height, width, xmin, ymin, xmax, ymax, class_name, class_names[class_name]]
                 if i <= c * SPLIT_RATIO:
-                    row[0] = os.path.abspath(os.path.join(TRAIN_FOLDER, os.path.basename(path)))
                     writer.writerow(row)
                 else:
-                    row[0] = os.path.abspath(os.path.join(VALIDATION_FOLDER, os.path.basename(path)))
                     writer2.writerow(row)
-                cv2.imwrite(row[0], cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE)))
 
                 s += 1
 
