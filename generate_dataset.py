@@ -147,6 +147,10 @@ def main():
                     for k in aug:
                         writer.writerow(k)
 
+                if xmin >= xmax or ymin >= ymax or xmax > width or ymax > height or xmin < 0 or ymin < 0:
+                    print("Warning: {} contains invalid box. Skipped...".format(path))
+                    continue
+
                 row = [path, height, width, xmin, ymin, xmax, ymax, class_name, class_names[class_name]]
                 if i <= c * SPLIT_RATIO:
                     writer.writerow(row)

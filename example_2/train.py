@@ -7,9 +7,8 @@ import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, Callback
-from tensorflow.keras.layers import MaxPooling2D, Conv2D, Reshape, Dense, GlobalAveragePooling2D
+from tensorflow.keras.layers import Conv2D, Reshape, Dense, GlobalAveragePooling2D
 from tensorflow.keras.utils import Sequence
-from tensorflow.keras.losses import mean_squared_error
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.backend import epsilon
 
@@ -31,7 +30,7 @@ VALIDATION_CSV = "validation.csv"
 
 CLASSES = 2
 
-class DataSequence(Sequence):
+class DataGenerator(Sequence):
 
     def __init__(self, csv_file):
         self.paths = []
@@ -77,37 +76,43 @@ class Validation(Callback):
         self.generator = generator
 
     def on_epoch_end(self, epoch, logs):
+        mse = 0
+        accuracy = 0
+
         intersections = 0
         unions = 0
-        accuracy = 0
 
         for i in range(len(self.generator)):
             batch_images, (gt, class_id) = self.generator[i]
             pred, pred_class = self.model.predict_on_batch(batch_images)
+            mse += np.linalg.norm(gt - pred, ord='fro') / pred.shape[0]
 
             pred_class = np.argmax(pred_class, axis=1)
             accuracy += np.sum(np.argmax(class_id, axis=1) == pred_class)
 
+            pred = np.maximum(pred, 0)
+
             diff_width = np.minimum(gt[:,0] + gt[:,2], pred[:,0] + pred[:,2]) - np.maximum(gt[:,0], pred[:,0])
             diff_height = np.minimum(gt[:,1] + gt[:,3], pred[:,1] + pred[:,3]) - np.maximum(gt[:,1], pred[:,1])
-            intersection = diff_width * diff_height
+            intersection = np.maximum(diff_width, 0) * np.maximum(diff_height, 0)
 
             area_gt = gt[:,2] * gt[:,3]
             area_pred = pred[:,2] * pred[:,3]
-            union = area_gt + area_pred - intersection
+            union = np.maximum(area_gt + area_pred - intersection, 0)
 
-            for j, _ in enumerate(union):
-                if union[j] > 0 and intersection[j] > 0 and union[j] >= intersection[j]:
-                    intersections += intersection[j]
-                    unions += union[j]
+            intersections += np.sum(intersection * (union > 0))
+            unions += np.sum(union)
 
         iou = np.round(intersections / (unions + epsilon()), 4)
-        accuracy = np.round(accuracy / len(self.generator.coords), 4)
-
         logs["val_iou"] = iou
-        logs["accuracy"] = accuracy
 
-        print(" - val_iou: {} - val_acc: {}".format(iou, accuracy))
+        mse = np.round(mse, 4)
+        logs["val_mse"] = mse
+
+        accuracy = np.round(accuracy / len(self.generator.coords), 4)
+        logs["val_acc"] = accuracy
+
+        print(" - val_iou: {} - val_mse: {} - val_acc: {}".format(iou, mse, accuracy))
 
 
 def create_model(trainable=False):
@@ -151,8 +156,8 @@ def focal_loss(alpha=0.9, gamma=2):
 def main():
     model = create_model()
 
-    train_datagen = DataSequence(TRAIN_CSV)
-    validation_datagen = Validation(generator=DataSequence(VALIDATION_CSV))
+    train_datagen = DataGenerator(TRAIN_CSV)
+    validation_datagen = Validation(generator=DataGenerator(VALIDATION_CSV))
 
     optimizer = Adam(lr=1e-3, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
     model.compile(loss={"coords" : log_mse, "classes" : focal_loss()}, loss_weights={"coords" : 1, "classes" : 1}, optimizer=optimizer, metrics=[])

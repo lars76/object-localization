@@ -6,11 +6,12 @@ import tensorflow as tf
 from PIL import Image
 from tensorflow.keras import Model
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.layers import Concatenate, Conv2D, UpSampling2D, Reshape
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, Callback
+from tensorflow.keras.layers import Concatenate, Conv2D, UpSampling2D, Reshape, BatchNormalization, Activation
 from tensorflow.keras.utils import Sequence
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import binary_crossentropy
+from tensorflow.keras.backend import epsilon
 
 
 # 0.35, 0.5, 0.75, 1.0
@@ -29,6 +30,7 @@ EPOCHS = 200
 BATCH_SIZE = 8
 PATIENCE = 15
 
+MULTI_PROCESSING = True
 THREADS = 4
 
 TRAIN_CSV = "train.csv"
@@ -57,10 +59,10 @@ class DataGenerator(Sequence):
                 y1 *= IMAGE_HEIGHT / image_height 
 
                 cell_start_x = max(math.ceil(x0 / CELL_WIDTH) - 1, 0)
-                cell_stop_x = min(math.ceil(x1 / CELL_WIDTH) - 1, WIDTH_CELLS - 1)
+                cell_stop_x = min(math.ceil(x1 / CELL_WIDTH), WIDTH_CELLS) - 1
 
                 cell_start_y = max(math.ceil(y0 / CELL_HEIGHT) - 1, 0)
-                cell_stop_y = min(math.ceil(y1 / CELL_HEIGHT) - 1, HEIGHT_CELLS - 1)
+                cell_stop_y = min(math.ceil(y1 / CELL_HEIGHT), HEIGHT_CELLS) - 1
 
                 self.mask[index, cell_start_y:cell_stop_y+1, cell_start_x:cell_stop_x+1] = 1
 
@@ -84,6 +86,29 @@ class DataGenerator(Sequence):
 
         return batch_images, batch_masks
 
+class Validation(Callback):
+    def __init__(self, generator):
+        self.generator = generator
+
+    def on_epoch_end(self, epoch, logs):
+        numerator = 0
+        denominator = 0
+
+        for i in range(len(self.generator)):
+            batch_images, gt = self.generator[i]
+            pred = self.model.predict_on_batch(batch_images)
+
+            pred[pred >= 0.5] = 1
+            pred[pred < 0.5] = 0
+
+            numerator += 2 * np.sum(gt * pred)
+            denominator += np.sum(gt + pred)
+
+        dice = np.round(numerator / denominator, 4)
+        logs["val_dice"] = dice
+
+        print(" - val_dice: {}".format(dice))
+
 def create_model(trainable=True):
     model = MobileNetV2(input_shape=(IMAGE_HEIGHT, IMAGE_WIDTH, 3), include_top=False, alpha=ALPHA, weights="imagenet")
 
@@ -94,44 +119,56 @@ def create_model(trainable=True):
     block2 = model.get_layer("block_12_add").output
     block3 = model.get_layer("block_15_add").output
 
-    x = Concatenate()([UpSampling2D()(block3), block2])
-    x = Concatenate()([UpSampling2D()(x), block1])
+    blocks = [block2, block1]
+
+    x = block3
+    for block in blocks:
+        x = UpSampling2D()(x)
+
+        x = Conv2D(256, kernel_size=3, padding="same", strides=1)(x)
+        x = BatchNormalization()(x)
+        x = Activation("relu")(x)
+
+        x = Concatenate()([x, block])
+
+        x = Conv2D(256, kernel_size=3, padding="same", strides=1)(x)
+        x = BatchNormalization()(x)
+        x = Activation("relu")(x)
 
     x = Conv2D(1, kernel_size=1, activation="sigmoid")(x)
     x = Reshape((HEIGHT_CELLS, WIDTH_CELLS))(x)
 
     return Model(inputs=model.input, outputs=x)
 
-def dice_coefficient(y_true, y_pred):
-    numerator = 2 * tf.reduce_sum(y_true * y_pred)
-    denominator = tf.reduce_sum(y_true + y_pred)
-
-    return numerator / (denominator + tf.keras.backend.epsilon())
-
 def loss(y_true, y_pred):
-    return binary_crossentropy(y_true, y_pred) - tf.log(dice_coefficient(y_true, y_pred) + tf.keras.backend.epsilon())
+    def dice_coefficient(y_true, y_pred):
+        numerator = 2 * tf.reduce_sum(y_true * y_pred)
+        denominator = tf.reduce_sum(y_true + y_pred)
+
+        return numerator / (denominator + epsilon())
+
+    return binary_crossentropy(y_true, y_pred) - tf.log(dice_coefficient(y_true, y_pred) + epsilon())
 
 def main():
     model = create_model()
     model.summary()
 
     train_datagen = DataGenerator(TRAIN_CSV)
-    validation_datagen = DataGenerator(VALIDATION_CSV)
+    validation_datagen = Validation(generator=DataGenerator(VALIDATION_CSV))
 
     optimizer = Adam(lr=1e-4, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
-    model.compile(loss=loss, optimizer=optimizer, metrics=[dice_coefficient])
+    model.compile(loss=loss, optimizer=optimizer, metrics=[])
     
-    checkpoint = ModelCheckpoint("model-{val_loss:.2f}.h5", monitor="val_loss", verbose=1, save_best_only=True,
-                                 save_weights_only=True, mode="auto", period=1)
-    stop = EarlyStopping(monitor="val_loss", patience=PATIENCE, mode="auto")
-    reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=5, min_lr=1e-6, verbose=1, mode="auto")
+    checkpoint = ModelCheckpoint("model-{val_dice:.2f}.h5", monitor="val_dice", verbose=1, save_best_only=True,
+                                 save_weights_only=True, mode="max", period=1)
+    stop = EarlyStopping(monitor="val_dice", patience=PATIENCE, mode="max")
+    reduce_lr = ReduceLROnPlateau(monitor="val_dice", factor=0.2, patience=5, min_lr=1e-6, verbose=1, mode="max")
 
     model.fit_generator(generator=train_datagen,
                         epochs=EPOCHS,
-                        validation_data=validation_datagen,
-                        callbacks=[checkpoint, reduce_lr, stop],
+                        callbacks=[validation_datagen, checkpoint, reduce_lr, stop],
                         workers=THREADS,
-                        use_multiprocessing=True,
+                        use_multiprocessing=MULTI_PROCESSING,
                         shuffle=True,
                         verbose=1)
 

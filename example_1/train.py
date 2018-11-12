@@ -27,7 +27,7 @@ TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
 
 
-class DataSequence(Sequence):
+class DataGenerator(Sequence):
 
     def __init__(self, csv_file):
         self.paths = []
@@ -72,32 +72,37 @@ class Validation(Callback):
         self.generator = generator
 
     def on_epoch_end(self, epoch, logs):
+        mse = 0
         intersections = 0
         unions = 0
 
         for i in range(len(self.generator)):
             batch_images, gt = self.generator[i]
             pred = self.model.predict_on_batch(batch_images)
+            mse += np.linalg.norm(gt - pred, ord='fro') / pred.shape[0]
+
+            pred = np.maximum(pred, 0)
 
             diff_width = np.minimum(gt[:,0] + gt[:,2], pred[:,0] + pred[:,2]) - np.maximum(gt[:,0], pred[:,0])
             diff_height = np.minimum(gt[:,1] + gt[:,3], pred[:,1] + pred[:,3]) - np.maximum(gt[:,1], pred[:,1])
-            intersection = diff_width * diff_height
+            intersection = np.maximum(diff_width, 0) * np.maximum(diff_height, 0)
 
             area_gt = gt[:,2] * gt[:,3]
             area_pred = pred[:,2] * pred[:,3]
-            union = area_gt + area_pred - intersection
+            union = np.maximum(area_gt + area_pred - intersection, 0)
 
-            for j, _ in enumerate(union):
-                if union[j] > 0 and intersection[j] > 0 and union[j] >= intersection[j]:
-                    intersections += intersection[j]
-                    unions += union[j]
+            intersections += np.sum(intersection * (union > 0))
+            unions += np.sum(union)
 
         iou = np.round(intersections / (unions + epsilon()), 4)
         logs["val_iou"] = iou
 
-        print(" - val_iou: {}".format(iou))
+        mse = np.round(mse, 4)
+        logs["val_mse"] = mse
 
-def create_model(trainable=True):
+        print(" - val_iou: {} - val_mse: {}".format(iou, mse))
+
+def create_model(trainable=False):
     model = MobileNetV2(input_shape=(IMAGE_SIZE, IMAGE_SIZE, 3), include_top=False, alpha=ALPHA)
 
     # to freeze layers
@@ -114,8 +119,8 @@ def main():
     model = create_model()
     model.summary()
 
-    train_datagen = DataSequence(TRAIN_CSV)
-    validation_datagen = Validation(generator=DataSequence(VALIDATION_CSV))
+    train_datagen = DataGenerator(TRAIN_CSV)
+    validation_datagen = Validation(generator=DataGenerator(VALIDATION_CSV))
 
     model.compile(loss="mean_squared_error", optimizer="adam", metrics=[])
 

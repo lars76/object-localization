@@ -37,9 +37,9 @@ We proceed in the same way to build the object detector:
 
 The code in this repository uses MobileNetv2 [1], because it is faster than other models and the performance can be adapted. For example, if alpha = 0.35 with 96x96 is not good enough, one can just increase both values (see [2] for a comparison). If you use another architecture, change `preprocess_input`.
 
-1. python3 example_1/train.py
-2. Adjust the WEIGHTS_FILE in evaluate_performance.py (given by the last script)
-3. python3 example_1/test.py
+1. `python3 example_1/train.py`
+2. Adjust the WEIGHTS_FILE in `example_1/test.py` (given by the last script)
+3. `python3 example_1/test.py`
 
 ### Result
 
@@ -84,6 +84,7 @@ In this example, we use a skip-net architecture similar to U-Net. For an in-dept
 - add more layers
 - try out other loss functions (MAE, smooth L1 loss etc.)
 - other optimizer: SGD with momentum 0.9, adjust learning rate
+- use a feature pyramid
 - read https://github.com/keras-team/keras/pull/9965
 
 ## Increase training speed
