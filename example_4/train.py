@@ -8,25 +8,26 @@ from tensorflow.keras import Model
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, Callback
 from tensorflow.keras.layers import *
+from tensorflow.keras.losses import binary_crossentropy
 from tensorflow.keras.utils import Sequence
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.backend import epsilon
 
-
 # 0.35, 0.5, 0.75, 1.0
-ALPHA = 0.35
+ALPHA = 1.0
 
-GRID_SIZE = 14
+GRID_SIZE = 7
 IMAGE_SIZE = 224
 
+# first train with frozen weights, then fine tune
 TRAINABLE = False
 EPOCHS = 200
 BATCH_SIZE = 32
 PATIENCE = 15
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-5
 
 MULTITHREADING = True
-THREADS = 4
+THREADS = 8
 
 TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
@@ -40,7 +41,7 @@ class DataGenerator(Sequence):
             lines = sum(1 for line in file)
             file.seek(0)
 
-            self.mask = np.zeros((lines, GRID_SIZE, GRID_SIZE, 3))
+            self.mask = np.zeros((lines, GRID_SIZE, GRID_SIZE, 5))
 
             reader = csv.reader(file, delimiter=",")
 
@@ -56,14 +57,19 @@ class DataGenerator(Sequence):
                 w = (x1 - x0) / image_width
                 h = (y1 - y0) / image_height
 
-                cell_x = int(min(np.rint(mid_x * GRID_SIZE), GRID_SIZE)) - 1
-                cell_y = int(min(np.rint(mid_y * GRID_SIZE), GRID_SIZE)) - 1
-                cell_w = w * GRID_SIZE
-                cell_h = h * GRID_SIZE
+                unrounded_x = min(mid_x * GRID_SIZE, GRID_SIZE)
+                unrounded_y = min(mid_y * GRID_SIZE, GRID_SIZE)
+
+                cell_x = int(np.floor(unrounded_x))
+                cell_y = int(np.floor(unrounded_y))
+                cell_w = (x1 - x0) * GRID_SIZE / image_width
+                cell_h = (y1 - y0) * GRID_SIZE / image_height
 
                 self.mask[index, :, :, 0] = cell_h
                 self.mask[index, :, :, 1] = cell_w
-                self.mask[index, cell_y, cell_x, 2] = 1
+                self.mask[index, :, :, 2] = unrounded_y - cell_y
+                self.mask[index, :, :, 3] = unrounded_x - cell_x
+                self.mask[index, cell_y - 1, cell_x - 1, 4] = 1
 
                 self.paths.append(path)
  
@@ -89,17 +95,19 @@ class DataGenerator(Sequence):
 
 class Validation(Callback):
     def get_box(self, mask):
-        reshaped = mask.reshape(mask.shape[0], -1, 3)
+        reshaped = mask.reshape(mask.shape[0], mask.shape[1] * mask.shape[2], -1)
 
-        score_ind = np.argmax(reshaped[...,2], axis=-1)
+        score_ind = np.argmax(reshaped[...,-1], axis=-1)
 
         height = reshaped[range(reshaped.shape[0]), score_ind, 0]
         width = reshaped[range(reshaped.shape[0]), score_ind, 1]
+        offset_y = reshaped[range(reshaped.shape[0]), score_ind, 2]
+        offset_x = reshaped[range(reshaped.shape[0]), score_ind, 3]
 
         y = score_ind // mask.shape[2]
         x = score_ind % mask.shape[2]
 
-        return np.stack([x, y, width, height], axis=-1)
+        return np.stack([x + offset_x + 1, y + offset_y + 1, width, height], axis=-1)
 
     def __init__(self, generator):
         self.generator = generator
@@ -142,12 +150,16 @@ class Validation(Callback):
 
 def clip(boxes):
     _, height, width, _ = boxes.shape
+    height = tf.cast(height, tf.float32)
+    width = tf.cast(width, tf.float32)
 
-    h = tf.clip_by_value(boxes[..., 0], 0.0, tf.cast(height, tf.float32))
-    w = tf.clip_by_value(boxes[..., 1], 0.0, tf.cast(width, tf.float32))
-    s = tf.clip_by_value(boxes[..., 2], epsilon(), 1.0)
+    h = tf.clip_by_value(boxes[..., 0], epsilon(), height - epsilon())
+    w = tf.clip_by_value(boxes[..., 1], epsilon(), width - epsilon())
+    y = tf.clip_by_value(boxes[..., 2], epsilon(), 1.0 - epsilon())
+    x = tf.clip_by_value(boxes[..., 3], epsilon(), 1.0 - epsilon())
+    s = tf.clip_by_value(boxes[..., 4], epsilon(), 1.0 - epsilon())
 
-    return tf.stack([h, w, s], axis=-1)
+    return tf.stack([h, w, y, x, s], axis=-1)
 
 def create_model(trainable=False):
     model = MobileNetV2(input_shape=(IMAGE_SIZE, IMAGE_SIZE, 3), include_top=False, alpha=ALPHA, weights="imagenet")
@@ -155,64 +167,100 @@ def create_model(trainable=False):
     for layer in model.layers:
         layer.trainable = trainable
 
-    #block0 = model.get_layer("Conv1_relu").output
-    #block1 = model.get_layer("block_2_add").output
-    #block2 = model.get_layer("block_5_add").output
-    block3 = model.get_layer("block_12_add").output
-    block4 = model.get_layer("block_15_add").output
+    block = model.get_layer("block_16_project_BN").output
 
-    blocks = [block3]#, block2, block1, block0]
+    x = Conv2D(320, padding="same", kernel_size=3, strides=1)(block)
+    x = BatchNormalization()(x)
+    x = Activation("relu")(x)
 
-    x = block4
-    for block in blocks:
-        x = UpSampling2D()(x)
-        x = Concatenate()([x, block])
-
-    x = Conv2D(256, kernel_size=3, padding="same", strides=1, activation="relu")(x)
-    x = Conv2D(256, kernel_size=3, padding="same", strides=1, activation="relu")(x)
-    x = Conv2D(3, kernel_size=1, activation=lambda l : tf.concat([l[...,:2], tf.sigmoid(l[...,2:])], axis=-1))(x)
-
+    x = Conv2D(5, padding="same", kernel_size=1, activation=lambda l : tf.concat([l[...,:4], tf.sigmoid(l[...,4:5])], axis=-1))(x)
     x = Lambda(clip)(x)
 
     return Model(inputs=model.input, outputs=x)
 
-def detection_loss(alpha=0.9, gamma=2, threshold=0.5):
-    def obj_loss(y_true, y_pred):
-        y_pred = tf.clip_by_value(y_pred, epsilon(), 1 - epsilon())
-        logits = tf.log(y_pred / (1 - y_pred))
+def detection_loss(iou_threshold=0.5):
+    def get_box_highest_percentage(arr):
+        shape = tf.shape(arr)
+        batch, height, width = shape[0], shape[1], shape[2]
 
-        weight_a = alpha * (1 - y_pred) ** gamma * y_true
-        weight_b = (1 - alpha) * y_pred ** gamma * (1 - y_true)
+        reshaped = tf.reshape(arr, (batch, height * width, -1))
 
-        loss_ = (tf.log1p(tf.exp(-tf.abs(logits))) + tf.nn.relu(-logits)) * (weight_a + weight_b) + logits * weight_b 
+        max_prob_ind = tf.argmax(reshaped[...,-1], axis=1, output_type=tf.int32)
+        indices = tf.stack([tf.range(batch), max_prob_ind], axis=-1)
 
-        return tf.reduce_sum(loss_)
+        height, width = tf.cast(height, tf.float32), tf.cast(width, tf.float32)
+        y, x = tf.cast(indices[...,1:2], tf.float32) // height, tf.cast(indices[...,1:2], tf.float32) % width
 
-    def coord_loss(y_true, y_pred, prob):
-        diff = y_true - y_pred
-        loss_ = tf.where(tf.less(diff, 1.0), 0.5 * diff ** 2, tf.abs(diff) - 0.5)
+        out = tf.concat([y, x, tf.gather_nd(reshaped, indices)], axis=-1)
+        out = tf.concat([out[...,:1] + out[...,4:5] + 1, out[...,1:2] + out[...,5:6] + 1, out[...,2:4], out[...,6:7]], axis=-1)
 
-        return tf.log1p(tf.reduce_sum(prob ** gamma * loss_))
+        return out
+
+    def calculate_iou(true_box, pred_size):
+        shape = tf.shape(pred_size)
+        batch, height, width = shape[0], shape[1], shape[2]
+
+        flattened = tf.reshape(tf.range(height * width), (1, -1))
+        flattened = tf.tile(flattened, [batch, 1])
+        flattened = tf.reshape(flattened, (-1, height * width, 1))
+
+        ys = tf.cast(flattened, tf.float32) // tf.cast(height, tf.float32)
+        xs = tf.cast(flattened, tf.float32) % tf.cast(width, tf.float32)
+        merged = tf.stack([ys, xs], axis=-1)
+        merged = tf.reshape(merged, (batch, height, width, -1))
+
+        pred_boxes = tf.concat([merged[...,:1] + pred_size[...,2:3] + 1, merged[...,1:2] + pred_size[...,3:4] + 1, pred_size[...,:2]], axis=-1)
+        pred_boxes = tf.reshape(pred_boxes, (batch, height, width, -1))
+
+        true_boxes = tf.reshape(true_box, (batch, 1, -1))
+        true_boxes = tf.tile(true_boxes, [1, height * width, 1])
+        true_boxes = tf.reshape(true_boxes, (batch, height, width, -1))
+
+        y0 = tf.maximum(true_boxes[...,0], pred_boxes[...,0])
+        x0 = tf.maximum(true_boxes[...,1], pred_boxes[...,1])
+        y1 = tf.minimum(true_boxes[...,0] + true_boxes[...,2], pred_boxes[...,0] + pred_boxes[...,2])
+        x1 = tf.minimum(true_boxes[...,1] + true_boxes[...,3], pred_boxes[...,1] + pred_boxes[...,3])
+
+        intersection = (x1 - x0) * (y1 - y0)
+        union = true_boxes[...,2] * true_boxes[...,3] + pred_boxes[...,2] * pred_boxes[...,3]
+        res = tf.clip_by_value(intersection / (union - intersection + epsilon()), epsilon(), 1)
+        res = tf.reshape(res, (batch, height, width, 1))
+
+        return res
 
     def loss(y_true, y_pred):
-        obj_true = y_true[...,2:]
-        obj_pred = y_pred[...,2:]
+        obj_true = y_true[...,4:5]
+        obj_pred = y_pred[...,4:5]
 
-        coords_true = y_true[...,:2] * tf.cast(tf.greater(obj_pred, threshold), tf.float32)
-        coords_pred = y_pred[...,:2] * tf.cast(tf.greater(obj_pred, threshold), tf.float32)
+        true_box = get_box_highest_percentage(y_true)
+        pred_box = get_box_highest_percentage(y_pred)
 
-        return obj_loss(obj_true, obj_pred) + coord_loss(coords_true, coords_pred, obj_pred)
+        iou = calculate_iou(true_box, y_pred[...,:-1])
+        mask = tf.cast(tf.greater(iou, iou_threshold) | tf.equal(obj_true, 1), tf.float32)
+
+        boxes_true = y_true[...,:-1] * mask
+        boxes_pred = y_pred[...,:-1] * mask
+
+        obj_loss = binary_crossentropy(mask, obj_pred)
+        size_loss = tf.reduce_mean(tf.squared_difference(boxes_true[...,:2], boxes_pred[...,:2]))
+        coord_loss = tf.reduce_mean(tf.squared_difference(boxes_true[...,2:], boxes_pred[...,2:]))
+
+        size_loss2 = tf.reduce_mean(tf.squared_difference(true_box[...,:2], pred_box[...,:2]))
+        coord_loss2 = tf.reduce_mean(tf.squared_difference(true_box[...,2:], pred_box[...,2:]))
+
+        return obj_loss + size_loss + coord_loss + size_loss2 + coord_loss2
 
     return loss
 
 def main():
     model = create_model(trainable=TRAINABLE)
     model.summary()
+    #model.load_weights("model-0.55.h5")
 
     train_datagen = DataGenerator(TRAIN_CSV)
     validation_datagen = Validation(generator=DataGenerator(VALIDATION_CSV))
 
-    optimizer = Adam(lr=LEARNING_RATE, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
+    optimizer = SGD(lr=LEARNING_RATE, decay=1e-5, momentum=0.9, nesterov=False)
     model.compile(loss=detection_loss(), optimizer=optimizer, metrics=[])
     
     checkpoint = ModelCheckpoint("model-{val_iou:.2f}.h5", monitor="val_iou", verbose=1, save_best_only=True,

@@ -3,7 +3,7 @@ import cv2
 import glob
 import numpy as np
 
-WEIGHTS_FILE = "model-0.66.h5"
+WEIGHTS_FILE = "model-0.67.h5"
 IMAGES = "images/*jpg"
 
 IOU_THRESHOLD = 0.5
@@ -20,10 +20,10 @@ def main():
         feat_scaled = preprocess_input(np.array(image, dtype=np.float32))
 
         pred = model.predict(x=np.array([feat_scaled]))[0]
-        height, width, score = pred[..., 0].flatten(), pred[..., 1].flatten(), pred[..., 2].flatten()
+        height, width, y, x, score = pred[..., 0].flatten(), pred[..., 1].flatten(), pred[..., 2].flatten(), pred[..., 3].flatten(), pred[..., 4].flatten()
 
         coords = np.arange(pred.shape[0] * pred.shape[1])
-        boxes = np.stack([coords // pred.shape[1], coords % pred.shape[1], height, width, score], axis=-1)
+        boxes = np.stack([coords // pred.shape[0] + y + 1, coords % pred.shape[1] + x + 1, height, width, score], axis=-1)
         boxes = boxes[np.where(boxes[...,-1] >= SCORE_THRESHOLD)]
 
         selected_indices = tf.image.non_max_suppression(boxes[...,:-1], boxes[...,-1], MAX_OUTPUT_SIZE, IOU_THRESHOLD)
@@ -38,6 +38,7 @@ def main():
             y1 = y0 + h
             x1 = x0 + w
 
+            #cv2.rectangle(unscaled, (int(k[1] * unscaled.shape[0] / pred.shape[0]), int(k[0] * unscaled.shape[0] / pred.shape[0])), (int(10 + k[1] * unscaled.shape[0] / pred.shape[0]), int(10 + k[0] * unscaled.shape[0] / pred.shape[0])), (0, 0, 255), 1)
             cv2.rectangle(unscaled, (int(x0), int(y0)), (int(x1), int(y1)), (0, 255, 0), 1)
 
         cv2.imshow("image", unscaled)
