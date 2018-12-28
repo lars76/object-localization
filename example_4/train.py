@@ -1,9 +1,10 @@
 import csv
 import math
+import os
 
 import numpy as np
 import tensorflow as tf
-from PIL import Image
+from PIL import Image, ImageDraw, ImageEnhance
 from tensorflow.keras import Model
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, Callback
@@ -21,10 +22,12 @@ IMAGE_SIZE = 224
 
 # first train with frozen weights, then fine tune
 TRAINABLE = False
+WEIGHTS = "model-0.50.h5"
+
 EPOCHS = 200
 BATCH_SIZE = 32
 PATIENCE = 15
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-4
 
 MULTITHREADING = True
 THREADS = 8
@@ -34,63 +37,155 @@ VALIDATION_CSV = "validation.csv"
 
 class DataGenerator(Sequence):
 
-    def __init__(self, csv_file):
-        self.paths = []
+    def __init__(self, csv_file, rnd_rescale=True, rnd_multiply=True, rnd_color=True, rnd_crop=True, rnd_flip=False, debug=False):
+        self.boxes = []
+        self.rnd_rescale = rnd_rescale
+        self.rnd_multiply = rnd_multiply
+        self.rnd_color = rnd_color
+        self.rnd_crop = rnd_crop
+        self.rnd_flip = rnd_flip
+        self.debug = debug
 
         with open(csv_file, "r") as file:
-            lines = sum(1 for line in file)
-            file.seek(0)
-
-            self.mask = np.zeros((lines, GRID_SIZE, GRID_SIZE, 5))
-
             reader = csv.reader(file, delimiter=",")
-
             for index, row in enumerate(reader):
                 for i, r in enumerate(row[1:7]):
                     row[i+1] = int(r)
 
                 path, image_height, image_width, x0, y0, x1, y1, _, _ = row
-
-                mid_x = 1 / image_width * (x0 + (x1 - x0) / 2)
-                mid_y = 1 / image_height * (y0 + (y1 - y0) / 2)
-
-                w = (x1 - x0) / image_width
-                h = (y1 - y0) / image_height
-
-                unrounded_x = min(mid_x * GRID_SIZE, GRID_SIZE)
-                unrounded_y = min(mid_y * GRID_SIZE, GRID_SIZE)
-
-                cell_x = int(np.floor(unrounded_x))
-                cell_y = int(np.floor(unrounded_y))
-                cell_w = (x1 - x0) * GRID_SIZE / image_width
-                cell_h = (y1 - y0) * GRID_SIZE / image_height
-
-                self.mask[index, :, :, 0] = cell_h
-                self.mask[index, :, :, 1] = cell_w
-                self.mask[index, :, :, 2] = unrounded_y - cell_y
-                self.mask[index, :, :, 3] = unrounded_x - cell_x
-                self.mask[index, cell_y - 1, cell_x - 1, 4] = 1
-
-                self.paths.append(path)
- 
+                self.boxes.append((path, x0, y0, x1, y1))
 
     def __len__(self):
-        return math.ceil(len(self.paths) / BATCH_SIZE)
+        return math.ceil(len(self.boxes) / BATCH_SIZE)
 
     def __getitem__(self, idx):
-        batch_paths = self.paths[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
-        batch_masks = self.mask[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
+        boxes = self.boxes[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
 
-        batch_images = np.zeros((len(batch_paths), IMAGE_SIZE, IMAGE_SIZE, 3), dtype=np.float32)
-        for i, f in enumerate(batch_paths):
-            img = Image.open(f)
-            img = img.resize((IMAGE_SIZE, IMAGE_SIZE))
-            img = img.convert('RGB')
+        batch_images = np.zeros((len(boxes), IMAGE_SIZE, IMAGE_SIZE, 3), dtype=np.float32)
+        batch_boxes = np.zeros((len(boxes), GRID_SIZE, GRID_SIZE, 5), dtype=np.float32)
+        for i, row in enumerate(boxes):
+            path, x0, y0, x1, y1 = row
 
-            batch_images[i] = preprocess_input(np.array(img, dtype=np.float32))
-            img.close()
+            with Image.open(path) as img:
+                if self.rnd_rescale:
+                    old_width = img.width
+                    old_height = img.height
 
-        return batch_images, batch_masks
+                    rescale = np.random.uniform(low=0.6, high=1.4)
+                    new_width = int(old_width * rescale)
+                    new_height = int(old_height * rescale)
+
+                    img = img.resize((new_width, new_height))
+
+                    x0 *= new_width / old_width
+                    y0 *= new_height / old_height
+                    x1 *= new_width / old_width
+                    y1 *= new_height / old_height
+
+                if self.rnd_crop:
+                    start_x = np.random.randint(0, high=np.floor(0.15 * img.width))
+                    stop_x = img.width - np.random.randint(0, high=np.floor(0.15 * img.width))
+                    start_y = np.random.randint(0, high=np.floor(0.15 * img.height))
+                    stop_y = img.height - np.random.randint(0, high=np.floor(0.15 * img.height))
+
+                    img = img.crop((start_x, start_y, stop_x, stop_y))
+
+                    x0 = max(x0 - start_x, 0)
+                    y0 = max(y0 - start_y, 0)
+                    x1 = min(x1 - start_x, img.width)
+                    y1 = min(y1 - start_y, img.height)
+
+                    if np.abs(x1 - x0) < 5 or np.abs(y1 - y0) < 5:
+                        print("\nWarning: cropped too much (obj width {}, obj height {}, img width {}, img height {})\n".format(x1 - x0, y1 - y0, img.width, img.height))
+
+                if self.rnd_flip:
+                    elem = np.random.choice([0, 90, 180, 270, 1423, 1234])
+                    if elem % 10 == 0:
+                        x = x0 - img.width / 2
+                        y = y0 - img.height / 2
+
+                        x0 = img.width / 2 + x * np.cos(np.deg2rad(elem)) - y * np.sin(np.deg2rad(elem))
+                        y0 = img.height / 2 + x * np.sin(np.deg2rad(elem)) + y * np.cos(np.deg2rad(elem))
+
+                        x = x1 - img.width / 2
+                        y = y1 - img.height / 2
+
+                        x1 = img.width / 2 + x * np.cos(np.deg2rad(elem)) - y * np.sin(np.deg2rad(elem))
+                        y1 = img.height / 2 + x * np.sin(np.deg2rad(elem)) + y * np.cos(np.deg2rad(elem))
+
+                        img = img.rotate(-elem)
+                    else:
+                        if elem == 1423:
+                            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+                            y0 = img.height - y0
+                            y1 = img.height - y1
+                        elif elem == 1234:
+                            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+                            x0 = img.width - x0
+                            x1 = img.width - x1
+
+                image_width = img.width
+                image_height = img.height
+
+                if self.rnd_color:
+                    enhancer = ImageEnhance.Color(img)
+                    img = enhancer.enhance(np.random.uniform(low=0.5, high=1.5))
+
+                    enhancer2 = ImageEnhance.Brightness(img)
+                    img = enhancer.enhance(np.random.uniform(low=0.7, high=1.3))
+
+                img = img.resize((IMAGE_SIZE, IMAGE_SIZE))
+                img = img.convert('RGB')
+                img = np.array(img, dtype=np.float32)
+
+                if self.rnd_multiply:
+                    img[...,0] = np.floor(np.clip(img[...,0] * np.random.uniform(low=0.8, high=1.2), 0.0, 255.0))
+                    img[...,1] = np.floor(np.clip(img[...,1] * np.random.uniform(low=0.8, high=1.2), 0.0, 255.0))
+                    img[...,2] = np.floor(np.clip(img[...,2] * np.random.uniform(low=0.8, high=1.2), 0.0, 255.0))
+
+                batch_images[i] = preprocess_input(img.copy())
+
+            mid_x = 1 / image_width * (x0 + (x1 - x0) / 2)
+            mid_y = 1 / image_height * (y0 + (y1 - y0) / 2)
+
+            w = (x1 - x0) / image_width
+            h = (y1 - y0) / image_height
+
+            unrounded_x = min(mid_x * GRID_SIZE, GRID_SIZE)
+            unrounded_y = min(mid_y * GRID_SIZE, GRID_SIZE)
+
+            cell_x = int(np.floor(unrounded_x))
+            cell_y = int(np.floor(unrounded_y))
+            cell_w = (x1 - x0) * GRID_SIZE / image_width
+            cell_h = (y1 - y0) * GRID_SIZE / image_height
+
+            batch_boxes[i, :, :, 0] = cell_h
+            batch_boxes[i, :, :, 1] = cell_w
+            batch_boxes[i, :, :, 2] = unrounded_y - cell_y
+            batch_boxes[i, :, :, 3] = unrounded_x - cell_x
+            batch_boxes[i, cell_y - 1, cell_x - 1, 4] = 1
+
+            if self.debug:
+                changed = img.astype(np.uint8)
+                if not os.path.exists("__debug__"):
+                    os.makedirs("__debug__")
+
+                changed = Image.fromarray(changed)
+
+                h = cell_h * IMAGE_SIZE / GRID_SIZE
+                w = cell_w * IMAGE_SIZE / GRID_SIZE
+
+                y0 = unrounded_y * IMAGE_SIZE / GRID_SIZE - h / 2
+                x0 = unrounded_x * IMAGE_SIZE / GRID_SIZE - w / 2
+                y1 = y0 + h
+                x1 = x0 + w
+
+                draw = ImageDraw.Draw(changed)
+                draw.rectangle(((x0, y0), (x1, y1)), outline="green")
+
+                changed.save(os.path.join("__debug__", os.path.basename(path)))
+
+        return batch_images, batch_boxes
 
 
 class Validation(Callback):
@@ -153,11 +248,11 @@ def clip(boxes):
     height = tf.cast(height, tf.float32)
     width = tf.cast(width, tf.float32)
 
-    h = tf.clip_by_value(boxes[..., 0], epsilon(), height - epsilon())
-    w = tf.clip_by_value(boxes[..., 1], epsilon(), width - epsilon())
-    y = tf.clip_by_value(boxes[..., 2], epsilon(), 1.0 - epsilon())
-    x = tf.clip_by_value(boxes[..., 3], epsilon(), 1.0 - epsilon())
-    s = tf.clip_by_value(boxes[..., 4], epsilon(), 1.0 - epsilon())
+    h = tf.clip_by_value(boxes[..., 0], epsilon(), height)
+    w = tf.clip_by_value(boxes[..., 1], epsilon(), width)
+    y = tf.clip_by_value(boxes[..., 2], epsilon(), 1.0)
+    x = tf.clip_by_value(boxes[..., 3], epsilon(), 1.0)
+    s = tf.clip_by_value(boxes[..., 4], epsilon(), 1.0)
 
     return tf.stack([h, w, y, x, s], axis=-1)
 
@@ -238,27 +333,25 @@ def detection_loss(iou_threshold=0.5):
         iou = calculate_iou(true_box, y_pred[...,:-1])
         mask = tf.cast(tf.greater(iou, iou_threshold) | tf.equal(obj_true, 1), tf.float32)
 
-        boxes_true = y_true[...,:-1] * mask
-        boxes_pred = y_pred[...,:-1] * mask
-
         obj_loss = binary_crossentropy(mask, obj_pred)
-        size_loss = tf.reduce_mean(tf.squared_difference(boxes_true[...,:2], boxes_pred[...,:2]))
-        coord_loss = tf.reduce_mean(tf.squared_difference(boxes_true[...,2:], boxes_pred[...,2:]))
+        size_loss = tf.reduce_mean(tf.squared_difference(true_box[...,:2], pred_box[...,:2]))
+        coord_loss = tf.reduce_mean(tf.squared_difference(true_box[...,2:], pred_box[...,2:]))
 
-        size_loss2 = tf.reduce_mean(tf.squared_difference(true_box[...,:2], pred_box[...,:2]))
-        coord_loss2 = tf.reduce_mean(tf.squared_difference(true_box[...,2:], pred_box[...,2:]))
-
-        return obj_loss + size_loss + coord_loss + size_loss2 + coord_loss2
+        return obj_loss + size_loss + coord_loss
 
     return loss
 
 def main():
     model = create_model(trainable=TRAINABLE)
     model.summary()
-    #model.load_weights("model-0.55.h5")
+
+    if TRAINABLE:
+        model.load_weights(WEIGHTS)
 
     train_datagen = DataGenerator(TRAIN_CSV)
-    validation_datagen = Validation(generator=DataGenerator(VALIDATION_CSV))
+
+    val_generator = DataGenerator(VALIDATION_CSV, rnd_rescale=False, rnd_multiply=False, rnd_crop=False, rnd_flip=False, debug=False)
+    validation_datagen = Validation(generator=val_generator)
 
     optimizer = SGD(lr=LEARNING_RATE, decay=1e-5, momentum=0.9, nesterov=False)
     model.compile(loss=detection_loss(), optimizer=optimizer, metrics=[])
@@ -266,7 +359,7 @@ def main():
     checkpoint = ModelCheckpoint("model-{val_iou:.2f}.h5", monitor="val_iou", verbose=1, save_best_only=True,
                                  save_weights_only=True, mode="max", period=1)
     stop = EarlyStopping(monitor="val_iou", patience=PATIENCE, mode="max")
-    reduce_lr = ReduceLROnPlateau(monitor="val_iou", factor=0.2, patience=5, min_lr=1e-6, verbose=1, mode="max")
+    reduce_lr = ReduceLROnPlateau(monitor="val_iou", factor=0.6, patience=5, min_lr=1e-6, verbose=1, mode="max")
 
     model.fit_generator(generator=train_datagen,
                         epochs=EPOCHS,

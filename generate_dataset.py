@@ -101,9 +101,9 @@ def main():
         ymax = int(tree.findtext("./object/bndbox/ymax"))
 
         # hardcoded fix, the box is wrong
-        if "Abyssinian_1.jpg" in path:
-            xmin -= 160
-            xmax -= 160
+        #if "Abyssinian_1.jpg" in path:
+        #    xmin -= 160
+        #    xmax -= 160
 
         basename = os.path.basename(path)
         basename = os.path.splitext(basename)[0]

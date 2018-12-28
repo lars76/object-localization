@@ -3,7 +3,7 @@ import cv2
 import glob
 import numpy as np
 
-WEIGHTS_FILE = "model-0.67.h5"
+WEIGHTS_FILE = "model-0.78.h5"
 IMAGES = "images/*jpg"
 
 IOU_THRESHOLD = 0.5
