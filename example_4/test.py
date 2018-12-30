@@ -3,7 +3,7 @@ import cv2
 import glob
 import numpy as np
 
-WEIGHTS_FILE = "model-0.78.h5"
+WEIGHTS_FILE = "model-0.37.h5"
 IMAGES = "images/*jpg"
 
 IOU_THRESHOLD = 0.5
@@ -30,8 +30,8 @@ def main():
         selected_indices = tf.Session().run(selected_indices)
 
         for k in boxes[selected_indices]:
-            h = k[2] * unscaled.shape[0] / pred.shape[0]
-            w = k[3] * unscaled.shape[1] / pred.shape[1]
+            h = k[2] * unscaled.shape[0]
+            w = k[3] * unscaled.shape[1]
 
             y0 = k[0] * unscaled.shape[0] / pred.shape[0] - h / 2
             x0 = k[1] * unscaled.shape[1] / pred.shape[1] - w / 2
