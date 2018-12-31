@@ -172,8 +172,8 @@ class DataGenerator(Sequence):
                 h = cell_h * IMAGE_SIZE
                 w = cell_w * IMAGE_SIZE
 
-                y0 = unrounded_y * IMAGE_SIZE - h / 2
-                x0 = unrounded_x * IMAGE_SIZE - w / 2
+                y0 = unrounded_y * IMAGE_SIZE / GRID_SIZE - h / 2
+                x0 = unrounded_x * IMAGE_SIZE / GRID_SIZE - w / 2
                 y1 = y0 + h
                 x1 = x0 + w
 
@@ -254,14 +254,14 @@ def create_model(trainable=False):
 
     return Model(inputs=model.input, outputs=x)
 
-def detection_loss(iou_threshold=0.5):
+def detection_loss(iou_threshold=0.5, gamma=1):
     def get_box_highest_percentage(arr):
         shape = tf.shape(arr)
 
         reshaped = tf.reshape(arr, (shape[0], tf.reduce_prod(shape[1:-1]), -1))
 
         # returns array containing the index of the highest percentage of each batch
-        # where 0 <= index <= height * width * anchors
+        # where 0 <= index <= height * width
         max_prob_ind = tf.argmax(reshaped[...,-1], axis=-1, output_type=tf.int32)
 
         # turn indices (batch, y * x) into (batch, y, x)
@@ -286,7 +286,7 @@ def detection_loss(iou_threshold=0.5):
 
         return out
 
-    def calculate_iou(true_box, pred_boxes):
+    def transform_pred_boxes(pred_boxes):
         shape = tf.shape(pred_boxes)
         batch, height, width = shape[0], shape[1], shape[2]
 
@@ -294,29 +294,34 @@ def detection_loss(iou_threshold=0.5):
         ys, xs = tf.meshgrid(tf.range(height), tf.range(width))
 
         cell_y = tf.reshape(ys, (1, width, height))
-        cell_y = tf.cast(tf.tile(cell_y, [batch, 1, 1]), tf.float32)
+        cell_y = tf.cast(tf.tile(cell_y, (batch, 1, 1)), tf.float32)
 
         cell_x = tf.reshape(xs, (1, width, height))
-        cell_x = tf.cast(tf.tile(cell_x, [batch, 1, 1]), tf.float32)
+        cell_x = tf.cast(tf.tile(cell_x, (batch, 1, 1)), tf.float32)
 
         # transform box
-        # output is (batch, height, width, 5)
         pred = tf.stack([cell_y + pred_boxes[...,2] + 1, cell_x + pred_boxes[...,3] + 1,
                          pred_boxes[...,0], pred_boxes[...,1], pred_boxes[...,-1]], axis=-1)
 
+        return pred
+
+    def calculate_iou(true_box, pred_boxes):
+        shape = tf.shape(pred_boxes)
+        batch, height, width = shape[0], shape[1], shape[2]
+
         # reshape (batch, 5) to (batch, height, width, 5)
         gt = tf.reshape(true_box, (batch, 1, 1, -1))
-        gt = tf.tile(gt, [1, height, width, 1])
+        gt = tf.tile(gt, (1, height, width, 1))
 
         # calculate iou
-        y0 = tf.maximum(gt[...,0], pred[...,0])
-        x0 = tf.maximum(gt[...,1], pred[...,1])
-        y1 = tf.minimum(gt[...,0] + gt[...,2], pred[...,0] + pred[...,2])
-        x1 = tf.minimum(gt[...,1] + gt[...,3], pred[...,1] + pred[...,3])
+        y0 = tf.maximum(gt[...,0], pred_boxes[...,0])
+        x0 = tf.maximum(gt[...,1], pred_boxes[...,1])
+        y1 = tf.minimum(gt[...,0] + gt[...,2], pred_boxes[...,0] + pred_boxes[...,2])
+        x1 = tf.minimum(gt[...,1] + gt[...,3], pred_boxes[...,1] + pred_boxes[...,3])
 
         intersection = (x1 - x0) * (y1 - y0)
-        union = gt[...,2] * gt[...,3] + pred[...,2] * pred[...,3]
-        res = tf.clip_by_value(intersection / (union - intersection + epsilon()), epsilon(), 1)
+        union = gt[...,2] * gt[...,3] + pred_boxes[...,2] * pred_boxes[...,3]
+        res = tf.clip_by_value(intersection / (union - intersection + epsilon()), epsilon(), 1 - epsilon())
 
         # reshape (batch, height, width) to (batch, height, width, 1)
         res = tf.reshape(res, (batch, height, width, 1))
@@ -327,19 +332,29 @@ def detection_loss(iou_threshold=0.5):
         obj_true = y_true[...,4:5]
         obj_pred = y_pred[...,4:5]
 
+        # get the box with the highest percentage in each image
         true_box = get_box_highest_percentage(y_true)
         pred_box = get_box_highest_percentage(y_pred)
 
-        iou = calculate_iou(true_box, y_pred)
+        # get all boxes with overlap > iou_threshold or ground truth boxes
+        pred_boxes = transform_pred_boxes(y_pred)
+        iou = calculate_iou(true_box, pred_boxes)
         mask = tf.cast(tf.greater(iou, iou_threshold) | tf.equal(obj_true, 1), tf.float32)
 
+        # object loss based on previous mask
+        # iou > 0.5 means we found a valid box position
         obj_loss = binary_crossentropy(mask, obj_pred)
-        size_loss = tf.reduce_mean(tf.squared_difference(true_box[...,:2], pred_box[...,:2]))
-        coord_loss = tf.reduce_mean(tf.squared_difference(true_box[...,2:], pred_box[...,2:]))
 
-        all_obj = tf.reduce_mean(iou * tf.squared_difference(y_true[...,:-1], y_pred[...,:-1]))
+        # mse with the boxes that have the highest percentage
+        box_loss = tf.reduce_mean(tf.squared_difference(true_box[...,:-1], pred_box[...,:-1]))
 
-        return obj_loss + size_loss + coord_loss + all_obj
+        # mse with all boxes weighted by iou
+        shape = tf.shape(y_true)
+        true_box = tf.reshape(true_box, (shape[0], 1, 1, -1))
+        true_box = tf.tile(true_box, (1, shape[1], shape[2], 1))
+        box_loss_w = tf.reduce_mean(iou ** gamma * tf.squared_difference(true_box[...,:-1], pred_boxes[...,:-1]))
+
+        return obj_loss + box_loss + box_loss_w
 
     return loss
 
