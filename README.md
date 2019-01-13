@@ -11,12 +11,11 @@ Before getting started, we have to download a dataset and generate a csv file co
 3. tar xf images.tar.gz
 4. tar xf annotations.tar.gz
 5. mv annotations/xmls/* images/
-6. Optionally for data augmentations: pip3 install imgaug
-7. python3 generate_dataset.py
+6. python3 generate_dataset.py
 
 # Single-object detection
 
-## Example 1: Find the dogs/cats
+## Example 1: Finding dogs/cats
 
 ### Architecture
 
@@ -35,7 +34,7 @@ We proceed in the same way to build the object detector:
 3. Add one/multiple/no convolution block (or `_inverted_res_block` for MobileNetv2)
 4. Add a convolution layer for the coordinates
 
-The code in this repository uses MobileNetv2 [1], because it is faster than other models and the performance can be adapted. For example, if alpha = 0.35 with 96x96 is not good enough, one can just increase both values (see [2] for a comparison). If you use another architecture, change `preprocess_input`.
+The code in this repository uses MobileNetv2, because it is faster than other models and the performance can be adapted. For example, if alpha = 0.35 with 96x96 is not good enough, one can just increase both values (see [here](https://github.com/keras-team/keras-applications/blob/master/keras_applications/mobilenet_v2.py) for a comparison). If you use another architecture, change `preprocess_input`.
 
 1. `python3 example_1/train.py`
 2. Adjust the WEIGHTS_FILE in `example_1/test.py` (given by the last script)
@@ -49,7 +48,7 @@ In the following images red is the predicted box, green is the ground truth:
 
 ![Image 2](https://i.imgur.com/ll9PNOF.jpg)
 
-## Example 2: Find the dogs/cats and distinguish classes
+## Example 2: Finding dogs/cats and distinguishing classes
 
 This time we have to run the scripts `example_2/train.py` and `example_2/test.py`.
 
@@ -73,12 +72,22 @@ In this example, we use a skip-net architecture similar to U-Net. For an in-dept
 
 ![Dog](https://lars76.github.io/assets/images/dog2.gif)
 
+## Example 4: YOLO-like detection
+
+### Architecture
+
+This example is based on the three YOLO papers. For an in-depth explanation see [this blog post](https://lars76.github.io/neural-networks/object-detection/obj-detection-from-scratch/).
+
+### Result
+
+![Multiple dogs](https://lars76.github.io/assets/images/multiple_dogs.jpg)
+
 # Guidelines
 
 ## Improve accuracy (IoU)
 
-- enable augmentations: set `AUGMENTATION=True` in generate_dataset.py and install *imgaug*.
-- better augmentations: increase `AUGMENTATION_PER_IMAGE` and try out different transformations.
+- enable augmentations: see `example_4` the same code can be added to the other examples
+- better augmentations: try out different values (flips, rotation etc.)
 - for MobileNetv1/2: increase `ALPHA` and `IMAGE_SIZE` in train_model.py
 - other architectures: increase `IMAGE_SIZE`
 - add more layers
@@ -98,9 +107,3 @@ In this example, we use a skip-net architecture similar to U-Net. For an in-dept
 - If the new dataset is small and not similar to ImageNet, freeze some layers.
 - If the new dataset is large, freeze no layers.
 - read http://cs231n.github.io/transfer-learning/
-
-# References
-
-[1] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, L.-C. Chen. *MobileNetV2: Inverted Residuals and Linear Bottlenecks*.
-
-[2] https://github.com/keras-team/keras-applications/blob/master/keras_applications/mobilenet_v2.py

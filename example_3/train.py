@@ -13,18 +13,15 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import binary_crossentropy
 from tensorflow.keras.backend import epsilon
 
-
 # 0.35, 0.5, 0.75, 1.0
 ALPHA = 1.0
 
-IMAGE_HEIGHT = 224
-IMAGE_WIDTH = 224
+GRID_SIZE = 28
+IMAGE_SIZE = 224
 
-HEIGHT_CELLS = 28
-WIDTH_CELLS = 28
-
-CELL_WIDTH = IMAGE_WIDTH / WIDTH_CELLS
-CELL_HEIGHT = IMAGE_HEIGHT / HEIGHT_CELLS
+# first train with frozen weights, then fine tune
+TRAINABLE = False
+WEIGHTS = "model-0.89.h5"
 
 EPOCHS = 200
 BATCH_SIZE = 8
@@ -42,7 +39,7 @@ class DataGenerator(Sequence):
         self.paths = []
 
         with open(csv_file, "r") as file:
-            self.mask = np.zeros((sum(1 for line in file), HEIGHT_CELLS, WIDTH_CELLS))
+            self.mask = np.zeros((sum(1 for line in file), GRID_SIZE, GRID_SIZE))
             file.seek(0)
 
             reader = csv.reader(file, delimiter=",")
@@ -53,18 +50,13 @@ class DataGenerator(Sequence):
 
                 path, image_height, image_width, x0, y0, x1, y1, _, _ = row
 
-                x0 *= IMAGE_WIDTH / image_width
-                y0 *= IMAGE_HEIGHT / image_height
-                x1 *= IMAGE_WIDTH / image_width
-                y1 *= IMAGE_HEIGHT / image_height 
+                cell_start_x = np.rint(((GRID_SIZE - 1) / image_width) * x0).astype(int)
+                cell_stop_x = np.rint(((GRID_SIZE - 1) / image_width) * x1).astype(int)
 
-                cell_start_x = max(math.ceil(x0 / CELL_WIDTH) - 1, 0)
-                cell_stop_x = min(math.ceil(x1 / CELL_WIDTH), WIDTH_CELLS) - 1
+                cell_start_y = np.rint(((GRID_SIZE - 1) / image_height) * y0).astype(int)
+                cell_stop_y = np.rint(((GRID_SIZE - 1) / image_height) * y1).astype(int)
 
-                cell_start_y = max(math.ceil(y0 / CELL_HEIGHT) - 1, 0)
-                cell_stop_y = min(math.ceil(y1 / CELL_HEIGHT), HEIGHT_CELLS) - 1
-
-                self.mask[index, cell_start_y:cell_stop_y+1, cell_start_x:cell_stop_x+1] = 1
+                self.mask[index, cell_start_y : cell_stop_y, cell_start_x : cell_stop_x] = 1
 
                 self.paths.append(path)
 
@@ -75,16 +67,16 @@ class DataGenerator(Sequence):
         batch_paths = self.paths[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
         batch_masks = self.mask[idx * BATCH_SIZE:(idx + 1) * BATCH_SIZE]
 
-        batch_images = np.zeros((len(batch_paths), IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=np.float32)
+        batch_images = np.zeros((len(batch_paths), IMAGE_SIZE, IMAGE_SIZE, 3), dtype=np.float32)
         for i, f in enumerate(batch_paths):
             img = Image.open(f)
-            img = img.resize((IMAGE_WIDTH, IMAGE_HEIGHT))
+            img = img.resize((IMAGE_SIZE, IMAGE_SIZE))
             img = img.convert('RGB')
 
             batch_images[i] = preprocess_input(np.array(img, dtype=np.float32))
             img.close()
 
-        return batch_images, batch_masks
+        return batch_images, batch_masks[:,:,:,np.newaxis]
 
 class Validation(Callback):
     def __init__(self, generator):
@@ -110,7 +102,7 @@ class Validation(Callback):
         print(" - val_dice: {}".format(dice))
 
 def create_model(trainable=True):
-    model = MobileNetV2(input_shape=(IMAGE_HEIGHT, IMAGE_WIDTH, 3), include_top=False, alpha=ALPHA, weights="imagenet")
+    model = MobileNetV2(input_shape=(IMAGE_SIZE, IMAGE_SIZE, 3), include_top=False, alpha=ALPHA, weights="imagenet")
 
     for layer in model.layers:
         layer.trainable = trainable
@@ -136,22 +128,24 @@ def create_model(trainable=True):
         x = Activation("relu")(x)
 
     x = Conv2D(1, kernel_size=1, activation="sigmoid")(x)
-    x = Reshape((HEIGHT_CELLS, WIDTH_CELLS))(x)
 
     return Model(inputs=model.input, outputs=x)
 
 def loss(y_true, y_pred):
     def dice_coefficient(y_true, y_pred):
-        numerator = 2 * tf.reduce_sum(y_true * y_pred)
-        denominator = tf.reduce_sum(y_true + y_pred)
+        numerator = 2 * tf.reduce_sum(y_true * y_pred, axis=-1)
+        denominator = tf.reduce_sum(y_true + y_pred, axis=-1)
 
         return numerator / (denominator + epsilon())
 
     return binary_crossentropy(y_true, y_pred) - tf.log(dice_coefficient(y_true, y_pred) + epsilon())
 
 def main():
-    model = create_model()
+    model = create_model(trainable=TRAINABLE)
     model.summary()
+
+    if TRAINABLE:
+        model.load_weights(WEIGHTS)
 
     train_datagen = DataGenerator(TRAIN_CSV)
     validation_datagen = Validation(generator=DataGenerator(VALIDATION_CSV))
