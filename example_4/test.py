@@ -3,11 +3,11 @@ import cv2
 import glob
 import numpy as np
 
-WEIGHTS_FILE = "model-0.51.h5"
+WEIGHTS_FILE = "model-0.75.h5"
 IMAGES = "images/*jpg"
 
 IOU_THRESHOLD = 0.5
-SCORE_THRESHOLD = 0.5
+SCORE_THRESHOLD = 0.1
 MAX_OUTPUT_SIZE = 49
 
 def main():

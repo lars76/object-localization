@@ -22,7 +22,7 @@ IMAGE_SIZE = 224
 
 # first train with frozen weights, then fine tune
 TRAINABLE = False
-WEIGHTS = "model-0.42.h5"
+WEIGHTS = "model-0.63.h5"
 
 EPOCHS = 200
 BATCH_SIZE = 32
@@ -207,7 +207,7 @@ class Validation(Callback):
         cell_y, cell_x = unraveled[...,0], unraveled[...,1]
         boxes = mask[np.arange(mask.shape[0]), cell_y, cell_x]
 
-        offset_y, offset_x, h, w = boxes[...,0], boxes[...,1], boxes[...,2], boxes[...,3]
+        h, w, offset_y, offset_x = boxes[...,0], boxes[...,1], boxes[...,2], boxes[...,3]
 
         return np.stack([cell_y + offset_y, cell_x + offset_x,
                         (GRID_SIZE - 1) * h, (GRID_SIZE - 1) * w], axis=-1)
