@@ -10,9 +10,11 @@ from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_i
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, Callback
 from tensorflow.keras.layers import *
 from tensorflow.keras.losses import binary_crossentropy
+from tensorflow.keras.regularizers import l2
 from tensorflow.keras.utils import Sequence
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.backend import epsilon
+from tensorflow.keras.models import model_from_json
 
 # 0.35, 0.5, 0.75, 1.0
 ALPHA = 0.35
@@ -22,12 +24,13 @@ IMAGE_SIZE = 224
 
 # first train with frozen weights, then fine tune
 TRAINABLE = False
-WEIGHTS = "model-0.63.h5"
+WEIGHTS = "model-0.64.h5"
 
 EPOCHS = 200
 BATCH_SIZE = 32
 PATIENCE = 15
 LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 0.0005
 
 MULTITHREADING = True
 THREADS = 4
@@ -253,6 +256,7 @@ class Validation(Callback):
 
 def create_model(trainable=False):
     model = MobileNetV2(input_shape=(IMAGE_SIZE, IMAGE_SIZE, 3), include_top=False, alpha=ALPHA, weights="imagenet")
+    model.save_weights("tmp.h5")
 
     for layer in model.layers:
         layer.trainable = trainable
@@ -266,7 +270,20 @@ def create_model(trainable=False):
 
     x = Conv2D(5, padding="same", kernel_size=1, activation="sigmoid")(x)
 
-    return Model(inputs=model.input, outputs=x)
+    model = Model(inputs=model.input, outputs=x)
+
+    # divide by 2 since d/dweight learning_rate * weight^2 = 2 * learning_rate * weight
+    # see https://arxiv.org/pdf/1711.05101.pdf
+    regularizer = l2(WEIGHT_DECAY / 2)
+    for layer in model.layers:
+        for attr in ['kernel_regularizer', 'bias_regularizer']:
+            if hasattr(layer, attr) and layer.trainable:
+                setattr(layer, attr, regularizer)
+
+    out = model_from_json(model.to_json())
+    out.load_weights("tmp.h5", by_name=True)
+
+    return out
 
 def detection_loss():
     def get_box_highest_percentage(arr):
@@ -328,7 +345,7 @@ def main():
     val_generator = DataGenerator(VALIDATION_CSV, rnd_rescale=False, rnd_multiply=False, rnd_crop=False, rnd_flip=False, debug=False)
     validation_datagen = Validation(generator=val_generator)
 
-    optimizer = SGD(lr=LEARNING_RATE, decay=1e-5, momentum=0.9, nesterov=False)
+    optimizer = SGD(lr=LEARNING_RATE, decay=0, momentum=0.9, nesterov=False)
     model.compile(loss=detection_loss(), optimizer=optimizer, metrics=[])
     
     checkpoint = ModelCheckpoint("model-{val_iou:.2f}.h5", monitor="val_iou", verbose=1, save_best_only=True,
