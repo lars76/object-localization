@@ -31,6 +31,7 @@ BATCH_SIZE = 32
 PATIENCE = 15
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.0005
+LR_DECAY = 0.0001
 
 MULTITHREADING = True
 THREADS = 4
@@ -256,7 +257,6 @@ class Validation(Callback):
 
 def create_model(trainable=False):
     model = MobileNetV2(input_shape=(IMAGE_SIZE, IMAGE_SIZE, 3), include_top=False, alpha=ALPHA, weights="imagenet")
-    model.save_weights("tmp.h5")
 
     for layer in model.layers:
         layer.trainable = trainable
@@ -264,7 +264,7 @@ def create_model(trainable=False):
     block = model.get_layer("block_16_project_BN").output
 
     x = Conv2D(112, padding="same", kernel_size=3, strides=1, activation="relu")(block)
-    x = Conv2D(112, padding="same", kernel_size=3, strides=1)(x)
+    x = Conv2D(112, padding="same", kernel_size=3, strides=1, use_bias=False)(x)
     x = BatchNormalization()(x)
     x = Activation("relu")(x)
 
@@ -275,15 +275,11 @@ def create_model(trainable=False):
     # divide by 2 since d/dweight learning_rate * weight^2 = 2 * learning_rate * weight
     # see https://arxiv.org/pdf/1711.05101.pdf
     regularizer = l2(WEIGHT_DECAY / 2)
-    for layer in model.layers:
-        for attr in ['kernel_regularizer', 'bias_regularizer']:
-            if hasattr(layer, attr) and layer.trainable:
-                setattr(layer, attr, regularizer)
+    for weight in model.trainable_weights:
+        with tf.keras.backend.name_scope("weight_regularizer"):
+            model.add_loss(regularizer(weight))
 
-    out = model_from_json(model.to_json())
-    out.load_weights("tmp.h5", by_name=True)
-
-    return out
+    return model
 
 def detection_loss():
     def get_box_highest_percentage(arr):
@@ -345,9 +341,13 @@ def main():
     val_generator = DataGenerator(VALIDATION_CSV, rnd_rescale=False, rnd_multiply=False, rnd_crop=False, rnd_flip=False, debug=False)
     validation_datagen = Validation(generator=val_generator)
 
-    optimizer = SGD(lr=LEARNING_RATE, decay=0, momentum=0.9, nesterov=False)
+    learning_rate = LEARNING_RATE
+    if TRAINABLE:
+        learning_rate /= 10
+
+    optimizer = SGD(lr=learning_rate, decay=LR_DECAY, momentum=0.9, nesterov=False)
     model.compile(loss=detection_loss(), optimizer=optimizer, metrics=[])
-    
+
     checkpoint = ModelCheckpoint("model-{val_iou:.2f}.h5", monitor="val_iou", verbose=1, save_best_only=True,
                                  save_weights_only=True, mode="max", period=1)
     stop = EarlyStopping(monitor="val_iou", patience=PATIENCE, mode="max")
