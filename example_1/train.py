@@ -20,8 +20,8 @@ EPOCHS = 200
 BATCH_SIZE = 32
 PATIENCE = 50
 
-MULTI_PROCESSING = True
-THREADS = 4
+MULTI_PROCESSING = False
+THREADS = 1
 
 TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
@@ -125,11 +125,9 @@ def main():
     model.compile(loss="mean_squared_error", optimizer="adam", metrics=[])
 
     checkpoint = ModelCheckpoint("model-{val_iou:.2f}.h5", monitor="val_iou", verbose=1, save_best_only=True,
-                                 save_weights_only=True, mode="max", period=1)
+                                 save_weights_only=True, mode="max")
     stop = EarlyStopping(monitor="val_iou", patience=PATIENCE, mode="max")
     reduce_lr = ReduceLROnPlateau(monitor="val_iou", factor=0.2, patience=10, min_lr=1e-7, verbose=1, mode="max")
-
-    model.summary()
 
     model.fit_generator(generator=train_datagen,
                         epochs=EPOCHS,

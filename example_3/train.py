@@ -27,8 +27,8 @@ EPOCHS = 200
 BATCH_SIZE = 8
 PATIENCE = 15
 
-MULTI_PROCESSING = True
-THREADS = 4
+MULTI_PROCESSING = False
+THREADS = 1
 
 TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
@@ -138,7 +138,7 @@ def loss(y_true, y_pred):
 
         return numerator / (denominator + epsilon())
 
-    return binary_crossentropy(y_true, y_pred) - tf.log(dice_coefficient(y_true, y_pred) + epsilon())
+    return binary_crossentropy(y_true, y_pred) - tf.math.log(dice_coefficient(y_true, y_pred) + epsilon())
 
 def main():
     model = create_model(trainable=TRAINABLE)
@@ -154,7 +154,7 @@ def main():
     model.compile(loss=loss, optimizer=optimizer, metrics=[])
     
     checkpoint = ModelCheckpoint("model-{val_dice:.2f}.h5", monitor="val_dice", verbose=1, save_best_only=True,
-                                 save_weights_only=True, mode="max", period=1)
+                                 save_weights_only=True, mode="max")
     stop = EarlyStopping(monitor="val_dice", patience=PATIENCE, mode="max")
     reduce_lr = ReduceLROnPlateau(monitor="val_dice", factor=0.2, patience=5, min_lr=1e-6, verbose=1, mode="max")
 

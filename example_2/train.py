@@ -22,8 +22,8 @@ EPOCHS = 200
 BATCH_SIZE = 32
 PATIENCE = 50
 
-MULTI_PROCESSING = True
-THREADS = 4
+MULTI_PROCESSING = False
+THREADS = 1
 
 TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
@@ -134,18 +134,18 @@ def create_model(trainable=False):
 
 
 def log_mse(y_true, y_pred):
-    return tf.reduce_mean(tf.log1p(tf.squared_difference(y_pred, y_true)), axis=-1)
+    return tf.reduce_mean(tf.math.log1p(tf.math.squared_difference(y_pred, y_true)), axis=-1)
 
 def focal_loss(alpha=0.9, gamma=2):
   def focal_loss_with_logits(logits, targets, alpha, gamma, y_pred):
     weight_a = alpha * (1 - y_pred) ** gamma * targets
     weight_b = (1 - alpha) * y_pred ** gamma * (1 - targets)
     
-    return (tf.log1p(tf.exp(-tf.abs(logits))) + tf.nn.relu(-logits)) * (weight_a + weight_b) + logits * weight_b 
+    return (tf.math.log1p(tf.exp(-tf.abs(logits))) + tf.nn.relu(-logits)) * (weight_a + weight_b) + logits * weight_b
 
   def loss(y_true, y_pred):
     y_pred = tf.clip_by_value(y_pred, tf.keras.backend.epsilon(), 1 - tf.keras.backend.epsilon())
-    logits = tf.log(y_pred / (1 - y_pred))
+    logits = tf.math.log(y_pred / (1 - y_pred))
 
     loss = focal_loss_with_logits(logits=logits, targets=y_true, alpha=alpha, gamma=gamma, y_pred=y_pred)
 
@@ -162,7 +162,7 @@ def main():
     optimizer = Adam(lr=1e-3, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
     model.compile(loss={"coords" : log_mse, "classes" : focal_loss()}, loss_weights={"coords" : 1, "classes" : 1}, optimizer=optimizer, metrics=[])
     checkpoint = ModelCheckpoint("model-{val_iou:.2f}.h5", monitor="val_iou", verbose=1, save_best_only=True,
-                                 save_weights_only=True, mode="max", period=1)
+                                 save_weights_only=True, mode="max")
     stop = EarlyStopping(monitor="val_iou", patience=PATIENCE, mode="max")
     reduce_lr = ReduceLROnPlateau(monitor="val_iou", factor=0.2, patience=10, min_lr=1e-7, verbose=1, mode="max")
 

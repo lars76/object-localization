@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageEnhance
 from tensorflow.keras import Model
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, Callback
-from tensorflow.keras.layers import *
+from tensorflow.keras.layers import Conv2D, BatchNormalization, Activation
 from tensorflow.keras.losses import binary_crossentropy
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras.utils import Sequence
@@ -33,8 +33,8 @@ LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.0005
 LR_DECAY = 0.0001
 
-MULTITHREADING = True
-THREADS = 4
+MULTITHREADING = False
+THREADS = 1
 
 TRAIN_CSV = "train.csv"
 VALIDATION_CSV = "validation.csv"
@@ -323,7 +323,7 @@ def detection_loss():
         obj_loss = binary_crossentropy(y_true[...,4:5], y_pred[...,4:5])
 
         # mse with the boxes that have the highest percentage
-        box_loss = tf.reduce_sum(tf.squared_difference(true_box[...,:-1], pred_box[...,:-1]))
+        box_loss = tf.reduce_sum(tf.math.squared_difference(true_box[...,:-1], pred_box[...,:-1]))
 
         return tf.reduce_sum(obj_loss) + box_loss
 
@@ -349,7 +349,7 @@ def main():
     model.compile(loss=detection_loss(), optimizer=optimizer, metrics=[])
 
     checkpoint = ModelCheckpoint("model-{val_iou:.2f}.h5", monitor="val_iou", verbose=1, save_best_only=True,
-                                 save_weights_only=True, mode="max", period=1)
+                                 save_weights_only=True, mode="max")
     stop = EarlyStopping(monitor="val_iou", patience=PATIENCE, mode="max")
     reduce_lr = ReduceLROnPlateau(monitor="val_iou", factor=0.6, patience=5, min_lr=1e-6, verbose=1, mode="max")
 
