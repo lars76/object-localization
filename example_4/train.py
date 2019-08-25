@@ -166,8 +166,8 @@ class DataGenerator(Sequence):
 
                 batch_images[i] = preprocess_input(img.copy())
 
-            x_c = ((GRID_SIZE - 1) / image_width) * (x0 + (x1 - x0) / 2)
-            y_c = ((GRID_SIZE - 1) / image_height) * (y0 + (y1 - y0) / 2)
+            x_c = (GRID_SIZE / image_width) * (x0 + (x1 - x0) / 2)
+            y_c = (GRID_SIZE / image_height) * (y0 + (y1 - y0) / 2)
 
             floor_y = math.floor(y_c)
             floor_x = math.floor(x_c)
@@ -185,8 +185,8 @@ class DataGenerator(Sequence):
 
                 changed = Image.fromarray(changed)
 
-                x_c = (floor_x + batch_boxes[i, floor_y, floor_x, 3]) / (GRID_SIZE - 1)
-                y_c = (floor_y + batch_boxes[i, floor_y, floor_x, 2]) / (GRID_SIZE - 1)
+                x_c = (floor_x + batch_boxes[i, floor_y, floor_x, 3]) / GRID_SIZE
+                y_c = (floor_y + batch_boxes[i, floor_y, floor_x, 2]) / GRID_SIZE
 
                 y0 = IMAGE_SIZE * (y_c - batch_boxes[i, floor_y, floor_x, 0] / 2)
                 x0 = IMAGE_SIZE * (x_c - batch_boxes[i, floor_y, floor_x, 1] / 2)
@@ -214,7 +214,7 @@ class Validation(Callback):
         h, w, offset_y, offset_x = boxes[...,0], boxes[...,1], boxes[...,2], boxes[...,3]
 
         return np.stack([cell_y + offset_y, cell_x + offset_x,
-                        (GRID_SIZE - 1) * h, (GRID_SIZE - 1) * w], axis=-1)
+                        GRID_SIZE * h, GRID_SIZE * w], axis=-1)
 
     def __init__(self, generator):
         self.generator = generator
@@ -226,7 +226,7 @@ class Validation(Callback):
 
         for i in range(len(self.generator)):
             batch_images, gt = self.generator[i]
-            pred = self.model.predict_on_batch(batch_images)
+            pred = self.model.predict_on_batch(batch_images)  # in tf2.0: add .numpy()
 
             pred = self.get_box_highest_percentage(pred)
             gt = self.get_box_highest_percentage(gt)
@@ -277,7 +277,7 @@ def create_model(trainable=False):
     regularizer = l2(WEIGHT_DECAY / 2)
     for weight in model.trainable_weights:
         with tf.keras.backend.name_scope("weight_regularizer"):
-            model.add_loss(regularizer(weight))
+            model.add_loss(regularizer(weight)) # in tf2.0: lambda: regularizer(weight)
 
     return model
 
@@ -306,10 +306,10 @@ def detection_loss():
 
         y, x = tf.cast(y, tf.float32), tf.cast(x, tf.float32)
 
-        # transform box to (y + offset_y, x + offset_x, 6 * height, 6 * width, obj)
+        # transform box to (y + offset_y, x + offset_x, 7 * height, 7 * width, obj)
         # output is (batch, 5)
         out = tf.stack([y + box[...,2], x + box[...,3],
-                        (GRID_SIZE - 1) * box[...,0], (GRID_SIZE - 1) * box[...,1],
+                        GRID_SIZE * box[...,0], GRID_SIZE * box[...,1],
                         box[...,-1]], axis=-1)
 
         return out
