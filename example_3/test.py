@@ -19,7 +19,7 @@ def main():
         region = np.squeeze(model.predict(feat_scaled[np.newaxis,:]))
 
         output = np.zeros(region.shape, dtype=np.uint8)
-        output[region > 0.5] = 1
+        output[region > THRESHOLD] = 1
 
         contours, _ = cv2.findContours(output, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
